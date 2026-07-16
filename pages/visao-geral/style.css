@@ -1,0 +1,57 @@
+.text-button { padding: 5px; border: 0; background: transparent; color: var(--wine); font-weight: 700; cursor: pointer; }
+
+.welcome-card { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 28px; min-height: 225px; padding: clamp(30px, 5vw, 55px); overflow: hidden; border-radius: 20px; background: linear-gradient(122deg, #70475c, #8d5e70); color: white; box-shadow: var(--shadow); }
+.welcome-copy { position: relative; z-index: 2; }
+.welcome-copy h2 { margin-bottom: 12px; }
+.welcome-copy p { margin-bottom: 0; color: #f5e9ec; }
+.countdown { position: relative; z-index: 2; display: flex; align-items: center; gap: 14px; min-width: 220px; }
+.countdown strong { font-family: "Playfair Display", serif; font-size: 68px; line-height: 1; }
+.countdown span { padding-left: 14px; border-left: 1px solid rgba(255,255,255,.4); color: #f2e3e7; font-size: 13px; line-height: 1.4; text-transform: uppercase; letter-spacing: .08em; }
+.flower { position: absolute; width: 180px; height: 180px; border: 1px solid rgba(255,255,255,.11); border-radius: 50% 0 50% 50%; transform: rotate(32deg); }
+.flower-one { right: -55px; top: -95px; box-shadow: -30px 50px 0 -1px rgba(255,255,255,.06); }
+.flower-two { left: 43%; bottom: -150px; width: 240px; height: 240px; }
+
+.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin: 20px 0; }
+.stat-card { display: flex; align-items: center; gap: 17px; min-width: 0; padding: 23px; background: var(--paper); border: 1px solid var(--line); border-radius: 15px; }
+.stat-icon { flex: 0 0 auto; display: grid; place-items: center; width: 47px; height: 47px; border-radius: 13px; font-size: 20px; }
+.stat-icon.rose { background: var(--rose-pale); color: var(--rose); }
+.stat-icon.sage { background: #e6eee5; color: var(--sage); }
+.stat-icon.gold { background: #f5ead8; color: var(--gold); }
+.stat-card span, .stat-card strong, .stat-card small { display: block; }
+.stat-card span { color: var(--muted); font-size: 12px; }
+.stat-card strong { margin: 2px 0; overflow: hidden; font-family: "Playfair Display", serif; font-size: 25px; text-overflow: ellipsis; white-space: nowrap; }
+.stat-card small { color: var(--muted); font-size: 11px; }
+
+.dashboard-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px; }
+.panel-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 21px; }
+.compact-list { display: grid; }
+.compact-item { display: flex; align-items: center; gap: 13px; padding: 13px 0; border-top: 1px solid var(--line); }
+.compact-item:first-child { border-top: 0; }
+.compact-check { width: 19px; height: 19px; border: 2px solid #d5c6ca; border-radius: 50%; }
+.compact-item div { flex: 1; min-width: 0; }
+.compact-item strong, .compact-item small { display: block; }
+.compact-item strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.compact-item small { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.tag { display: inline-block; padding: 4px 8px; border-radius: 20px; background: var(--rose-pale); color: var(--wine); font-size: 10px; font-weight: 700; }
+
+.progress-panel { text-align: center; }
+.progress-panel .panel-header { text-align: left; }
+.progress-ring { --progress: 0; display: grid; place-items: center; width: 145px; height: 145px; margin: 5px auto 17px; border-radius: 50%; background: conic-gradient(var(--wine) calc(var(--progress) * 1%), var(--rose-pale) 0); }
+.progress-ring::before { content: ""; grid-area: 1/1; width: 116px; height: 116px; border-radius: 50%; background: var(--paper); }
+.progress-ring div { z-index: 1; grid-area: 1/1; }
+.progress-ring strong, .progress-ring span { display: block; }
+.progress-ring strong { font-family: "Playfair Display", serif; font-size: 30px; }
+.progress-ring span { color: var(--muted); font-size: 11px; }
+.progress-panel > p { max-width: 300px; margin: 0 auto; color: var(--muted); font-size: 13px; line-height: 1.55; }
+
+@media (max-width: 900px) {
+    .stats-grid { grid-template-columns: 1fr; gap: 10px; }
+    .dashboard-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 620px) {
+    .welcome-card { display: block; padding: 31px 25px; }
+    .welcome-copy h2 { font-size: 31px; }
+    .countdown { margin-top: 29px; }
+    .countdown strong { font-size: 54px; }
+}

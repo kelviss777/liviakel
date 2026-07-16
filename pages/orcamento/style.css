@@ -1,0 +1,14 @@
+.check-field { display: flex; align-items: center; gap: 8px; min-height: 43px; white-space: nowrap; cursor: pointer; }
+.check-field input { accent-color: var(--wine); }
+
+.budget-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-bottom: 20px; }
+.budget-summary article { padding: 23px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); }
+.budget-summary span, .budget-summary strong { display: block; }
+.budget-summary span { margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.budget-summary strong { font-family: "Playfair Display", serif; font-size: 25px; }
+
+@media (max-width: 620px) {
+    .budget-summary { grid-template-columns: 1fr; gap: 9px; }
+    .budget-summary article { padding: 17px 20px; }
+    .budget-summary strong { font-size: 21px; }
+}

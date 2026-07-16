@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#744b61">
+    <title>Nosso Casamento</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../assets/global.css">
+    <link rel="stylesheet" href="../../components/sidebar.css">
+    <link rel="stylesheet" href="style.css">
+    <script src="../../js/app.js" defer></script>
+    <script src="../../components/sidebar.js" defer></script>
+    <script src="main.js" defer></script>
+</head>
+<body data-page="orcamento">
+    <div class="app-shell">
+        <aside class="sidebar" id="sidebar-container"></aside>
+
+        <main class="main-content">
+            <header class="topbar">
+                <div>
+                    <p class="eyebrow">Planejamento do casamento</p>
+                    <h1 id="page-title">Orçamento</h1>
+                </div>
+                <button class="button button-ghost" id="open-settings" type="button">Editar casamento</button>
+            </header>
+
+            <section class="page active" id="orcamento" aria-labelledby="page-title">
+                <div class="section-toolbar">
+                    <div><p class="section-description">Registre os valores para manter tudo sob controle.</p></div>
+                    <button class="button button-primary" data-toggle-form="expense-form-card" type="button">+ Novo gasto</button>
+                </div>
+
+                <article class="form-card hidden" id="expense-form-card">
+                    <form id="expense-form">
+                        <div class="field field-grow"><label for="expense-name">Descrição</label><input id="expense-name" name="name" required placeholder="Ex.: Espaço da festa"></div>
+                        <div class="field"><label for="expense-category">Categoria</label><select id="expense-category" name="category"><option>Local</option><option>Buffet</option><option>Decoração</option><option>Foto e vídeo</option><option>Vestuário</option><option>Música</option><option>Outros</option></select></div>
+                        <div class="field"><label for="expense-value">Valor previsto</label><input id="expense-value" name="value" type="number" min="0" step="0.01" required placeholder="0,00"></div>
+                        <label class="check-field"><input name="paid" type="checkbox"><span>Já foi pago</span></label>
+                        <button class="button button-primary form-submit" type="submit">Salvar</button>
+                    </form>
+                </article>
+
+                <div class="budget-summary">
+                    <article><span>Valor previsto</span><strong id="budget-total">R$ 0,00</strong></article>
+                    <article><span>Já foi pago</span><strong id="budget-paid">R$ 0,00</strong></article>
+                    <article><span>Ainda falta pagar</span><strong id="budget-remaining">R$ 0,00</strong></article>
+                </div>
+
+                <article class="panel table-panel">
+                    <div class="data-list" id="expense-list"></div>
+                </article>
+            </section>
+        </main>
+    </div>
+</body>
+</html>

@@ -1,0 +1,13 @@
+.filter-tabs { display: flex; gap: 6px; padding: 17px 20px; border-bottom: 1px solid var(--line); }
+.filter-tabs button { padding: 8px 13px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; }
+.filter-tabs button.active { background: var(--rose-pale); color: var(--wine); font-weight: 700; }
+.task-row { grid-template-columns: 34px minmax(190px, 1fr) minmax(110px, .5fr) minmax(100px, .5fr) 44px; }
+.task-toggle { width: 21px; height: 21px; border: 2px solid #cfbfc4; border-radius: 6px; background: white; cursor: pointer; }
+.task-toggle.done { border-color: var(--wine); background: var(--wine); color: white; }
+.task-row.completed .data-primary strong { color: #9a9297; text-decoration: line-through; }
+
+@media (max-width: 620px) {
+    .task-row { grid-template-columns: 34px 1fr; }
+    .task-row .data-primary { grid-column: 2; }
+    .task-row .data-cell { grid-column: 2; }
+}

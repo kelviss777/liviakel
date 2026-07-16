@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#744b61">
+    <title>Nosso Casamento</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../assets/global.css">
+    <link rel="stylesheet" href="../../components/sidebar.css">
+    <link rel="stylesheet" href="style.css">
+    <script src="../../js/app.js" defer></script>
+    <script src="../../components/sidebar.js" defer></script>
+    <script src="main.js" defer></script>
+</head>
+<body data-page="convidados">
+    <div class="app-shell">
+        <aside class="sidebar" id="sidebar-container"></aside>
+
+        <main class="main-content">
+            <header class="topbar">
+                <div>
+                    <p class="eyebrow">Planejamento do casamento</p>
+                    <h1 id="page-title">Convidados</h1>
+                </div>
+                <button class="button button-ghost" id="open-settings" type="button">Editar casamento</button>
+            </header>
+
+            <section class="page active" id="convidados" aria-labelledby="page-title">
+                <div class="section-toolbar">
+                    <div><p class="section-description">Organize a lista e acompanhe as confirmações.</p></div>
+                    <button class="button button-primary" data-toggle-form="guest-form-card" type="button">+ Adicionar convidado</button>
+                </div>
+
+                <article class="form-card hidden" id="guest-form-card">
+                    <form id="guest-form">
+                        <div class="field field-grow"><label for="guest-name">Nome</label><input id="guest-name" name="name" required placeholder="Nome do convidado"></div>
+                        <div class="field"><label for="guest-group">Grupo</label><select id="guest-group" name="group"><option>Família</option><option>Amigos</option><option>Trabalho</option><option>Outros</option></select></div>
+                        <div class="field"><label for="guest-status">Status</label><select id="guest-status" name="status"><option value="pending">Aguardando</option><option value="confirmed">Confirmado</option><option value="declined">Não vai</option></select></div>
+                        <button class="button button-primary form-submit" type="submit">Salvar</button>
+                    </form>
+                </article>
+
+                <article class="panel table-panel">
+                    <div class="list-controls">
+                        <label class="search-box"><span>⌕</span><input id="guest-search" type="search" placeholder="Buscar convidado"></label>
+                        <select id="guest-filter" aria-label="Filtrar convidados"><option value="all">Todos os status</option><option value="confirmed">Confirmados</option><option value="pending">Aguardando</option><option value="declined">Não vão</option></select>
+                    </div>
+                    <div class="data-list" id="guest-list"></div>
+                </article>
+            </section>
+        </main>
+    </div>
+</body>
+</html>
