@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#744b61">
+    <title>Nosso Casamento</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="first.js" defer></script>
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <a class="brand" href="#inicio" aria-label="Ir para o início">
+                <span class="brand-mark">N</span>
+                <span><strong>Nosso</strong><small>casamento</small></span>
+            </a>
+
+            <nav class="main-nav" aria-label="Navegação principal">
+                <button class="nav-item active" data-page="inicio" type="button">
+                    <span class="nav-icon">⌂</span> Visão geral
+                </button>
+                <button class="nav-item" data-page="convidados" type="button">
+                    <span class="nav-icon">♙</span> Convidados
+                </button>
+                <button class="nav-item" data-page="locais" type="button">
+                    <span class="nav-icon">⌖</span> Locais
+                </button>
+                <button class="nav-item" data-page="tarefas" type="button">
+                    <span class="nav-icon">✓</span> Checklist
+                </button>
+                <button class="nav-item" data-page="orcamento" type="button">
+                    <span class="nav-icon">$</span> Orçamento
+                </button>
+            </nav>
+
+            <div class="sidebar-note">
+                <span>♡</span>
+                <p>Um passo de cada vez até o grande dia.</p>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <header class="topbar">
+                <div>
+                    <p class="eyebrow">Planejamento do casamento</p>
+                    <h1 id="page-title">Visão geral</h1>
+                </div>
+                <button class="button button-ghost" id="open-settings" type="button">Editar casamento</button>
+            </header>
+
+            <section class="page active" id="inicio" aria-labelledby="page-title">
+                <div class="welcome-card">
+                    <div class="welcome-copy">
+                        <span class="eyebrow light">Nossa contagem regressiva</span>
+                        <h2 id="couple-title">Nosso grande dia</h2>
+                        <p id="wedding-date-text">Defina a data do casamento para começar a contagem.</p>
+                    </div>
+                    <div class="countdown" aria-label="Contagem regressiva">
+                        <strong id="days-left">—</strong>
+                        <span>dias<br>para o sim</span>
+                    </div>
+                    <div class="flower flower-one"></div>
+                    <div class="flower flower-two"></div>
+                </div>
+
+                <div class="stats-grid">
+                    <article class="stat-card">
+                        <div class="stat-icon rose">♙</div>
+                        <div><span>Convidados</span><strong id="stat-guests">0</strong><small id="stat-confirmed">0 confirmados</small></div>
+                    </article>
+                    <article class="stat-card">
+                        <div class="stat-icon sage">✓</div>
+                        <div><span>Tarefas concluídas</span><strong id="stat-tasks">0%</strong><small id="stat-task-detail">0 de 0 tarefas</small></div>
+                    </article>
+                    <article class="stat-card">
+                        <div class="stat-icon gold">$</div>
+                        <div><span>Total previsto</span><strong id="stat-budget">R$ 0</strong><small id="stat-paid">R$ 0 pagos</small></div>
+                    </article>
+                </div>
+
+                <div class="dashboard-grid">
+                    <article class="panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Checklist</p><h3>Próximas tarefas</h3></div>
+                            <button class="text-button" data-go-to="tarefas" type="button">Ver todas →</button>
+                        </div>
+                        <div class="compact-list" id="upcoming-tasks"></div>
+                    </article>
+
+                    <article class="panel progress-panel">
+                        <div class="panel-header">
+                            <div><p class="eyebrow">Progresso</p><h3>Como estamos?</h3></div>
+                        </div>
+                        <div class="progress-ring" id="progress-ring" style="--progress: 0">
+                            <div><strong id="progress-value">0%</strong><span>concluído</span></div>
+                        </div>
+                        <p id="progress-message">Adicione suas primeiras tarefas para acompanhar o progresso.</p>
+                    </article>
+                </div>
+            </section>
+
+            <section class="page" id="convidados" aria-labelledby="page-title">
+                <div class="section-toolbar">
+                    <div><p class="section-description">Organize a lista e acompanhe as confirmações.</p></div>
+                    <button class="button button-primary" data-toggle-form="guest-form-card" type="button">+ Adicionar convidado</button>
+                </div>
+
+                <article class="form-card hidden" id="guest-form-card">
+                    <form id="guest-form">
+                        <div class="field field-grow"><label for="guest-name">Nome</label><input id="guest-name" name="name" required placeholder="Nome do convidado"></div>
+                        <div class="field"><label for="guest-group">Grupo</label><select id="guest-group" name="group"><option>Família</option><option>Amigos</option><option>Trabalho</option><option>Outros</option></select></div>
+                        <div class="field"><label for="guest-status">Status</label><select id="guest-status" name="status"><option value="pending">Aguardando</option><option value="confirmed">Confirmado</option><option value="declined">Não vai</option></select></div>
+                        <button class="button button-primary form-submit" type="submit">Salvar</button>
+                    </form>
+                </article>
+
+                <article class="panel table-panel">
+                    <div class="list-controls">
+                        <label class="search-box"><span>⌕</span><input id="guest-search" type="search" placeholder="Buscar convidado"></label>
+                        <select id="guest-filter" aria-label="Filtrar convidados"><option value="all">Todos os status</option><option value="confirmed">Confirmados</option><option value="pending">Aguardando</option><option value="declined">Não vão</option></select>
+                    </div>
+                    <div class="data-list" id="guest-list"></div>
+                </article>
+            </section>
+
+            <section class="page" id="locais" aria-labelledby="page-title">
+                <div class="section-toolbar">
+                    <div><p class="section-description">Compare os espaços que vocês estão pensando em fechar.</p></div>
+                    <button class="button button-primary" data-toggle-form="venue-form-card" type="button">+ Adicionar local</button>
+                </div>
+
+                <article class="form-card hidden" id="venue-form-card">
+                    <form id="venue-form">
+                        <div class="field field-grow"><label for="venue-name">Nome do local</label><input id="venue-name" name="name" required placeholder="Ex.: Villa Jardim"></div>
+                        <div class="field"><label for="venue-type">Tipo</label><select id="venue-type" name="type"><option>Espaço para festa</option><option>Igreja</option><option>Cartório</option><option>Buffet</option><option>Hospedagem</option><option>Outro</option></select></div>
+                        <div class="field venue-address-field"><label for="venue-address">Endereço</label><input id="venue-address" name="address" required placeholder="Rua, número, cidade"></div>
+                        <button class="button button-primary form-submit" type="submit">Salvar</button>
+                    </form>
+                </article>
+
+                <div class="venue-tip">
+                    <span>★</span>
+                    <p>Favorite os locais preferidos de vocês. Clique no endereço para abrir diretamente no Google Maps.</p>
+                </div>
+
+                <div class="venue-grid" id="venue-list"></div>
+            </section>
+
+            <section class="page" id="tarefas" aria-labelledby="page-title">
+                <div class="section-toolbar">
+                    <div><p class="section-description">Transforme os preparativos em passos pequenos e claros.</p></div>
+                    <button class="button button-primary" data-toggle-form="task-form-card" type="button">+ Nova tarefa</button>
+                </div>
+
+                <article class="form-card hidden" id="task-form-card">
+                    <form id="task-form">
+                        <div class="field field-grow"><label for="task-name">Tarefa</label><input id="task-name" name="name" required placeholder="Ex.: Escolher o fotógrafo"></div>
+                        <div class="field"><label for="task-category">Categoria</label><select id="task-category" name="category"><option>Cerimônia</option><option>Festa</option><option>Fornecedores</option><option>Documentos</option><option>Pessoal</option></select></div>
+                        <div class="field"><label for="task-date">Prazo</label><input id="task-date" name="date" type="date"></div>
+                        <button class="button button-primary form-submit" type="submit">Salvar</button>
+                    </form>
+                </article>
+
+                <article class="panel table-panel">
+                    <div class="filter-tabs" id="task-filters">
+                        <button class="active" data-filter="all" type="button">Todas</button>
+                        <button data-filter="pending" type="button">Pendentes</button>
+                        <button data-filter="done" type="button">Concluídas</button>
+                    </div>
+                    <div class="data-list task-list" id="task-list"></div>
+                </article>
+            </section>
+
+            <section class="page" id="orcamento" aria-labelledby="page-title">
+                <div class="section-toolbar">
+                    <div><p class="section-description">Registre os valores para manter tudo sob controle.</p></div>
+                    <button class="button button-primary" data-toggle-form="expense-form-card" type="button">+ Novo gasto</button>
+                </div>
+
+                <article class="form-card hidden" id="expense-form-card">
+                    <form id="expense-form">
+                        <div class="field field-grow"><label for="expense-name">Descrição</label><input id="expense-name" name="name" required placeholder="Ex.: Espaço da festa"></div>
+                        <div class="field"><label for="expense-category">Categoria</label><select id="expense-category" name="category"><option>Local</option><option>Buffet</option><option>Decoração</option><option>Foto e vídeo</option><option>Vestuário</option><option>Música</option><option>Outros</option></select></div>
+                        <div class="field"><label for="expense-value">Valor previsto</label><input id="expense-value" name="value" type="number" min="0" step="0.01" required placeholder="0,00"></div>
+                        <label class="check-field"><input name="paid" type="checkbox"><span>Já foi pago</span></label>
+                        <button class="button button-primary form-submit" type="submit">Salvar</button>
+                    </form>
+                </article>
+
+                <div class="budget-summary">
+                    <article><span>Valor previsto</span><strong id="budget-total">R$ 0,00</strong></article>
+                    <article><span>Já foi pago</span><strong id="budget-paid">R$ 0,00</strong></article>
+                    <article><span>Ainda falta pagar</span><strong id="budget-remaining">R$ 0,00</strong></article>
+                </div>
+
+                <article class="panel table-panel">
+                    <div class="data-list" id="expense-list"></div>
+                </article>
+            </section>
+        </main>
+    </div>
+
+    <dialog id="settings-dialog">
+        <form id="settings-form" method="dialog">
+            <div class="dialog-header"><div><p class="eyebrow">Personalizar</p><h2>Nosso casamento</h2></div><button class="icon-button" id="close-settings" type="button" aria-label="Fechar">×</button></div>
+            <div class="field"><label for="partner-one">Primeiro nome</label><input id="partner-one" name="partnerOne" placeholder="Ex.: Ana"></div>
+            <div class="field"><label for="partner-two">Segundo nome</label><input id="partner-two" name="partnerTwo" placeholder="Ex.: Lucas"></div>
+            <div class="field"><label for="wedding-date">Data do casamento</label><input id="wedding-date" name="weddingDate" type="date"></div>
+            <button class="button button-primary full-width" type="submit">Salvar alterações</button>
+        </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
