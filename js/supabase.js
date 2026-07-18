@@ -3,8 +3,8 @@
  * A chave publicável pode ficar no navegador. Nunca coloque a secret key
  * ou a antiga service_role neste arquivo.
  */
-const SUPABASE_URL = "";
-const SUPABASE_PUBLISHABLE_KEY = "";
+const SUPABASE_URL = "https://tqxgtddvzmmmgahqsvhu.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_0-5WGpH1PeoUJ8qndLuUVg_CfmxZWPZ";
 
 let supabaseClient = null;
 let supabaseScriptPromise = null;
