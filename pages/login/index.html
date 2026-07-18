@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#744b61">
+    <title>Entrar | Nosso Casamento</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../assets/global.css">
+    <link rel="stylesheet" href="style.css">
+    <script src="../../js/supabase.js" defer></script>
+    <script src="main.js" defer></script>
+</head>
+<body>
+    <main class="login-page">
+        <section class="login-hero" aria-label="Apresentação">
+            <a class="login-brand" href="../visao-geral/index.html" aria-label="Nosso Casamento">
+                <span class="login-brand-mark">N</span>
+                <span><strong>Nosso</strong><small>casamento</small></span>
+            </a>
+
+            <div class="hero-copy">
+                <p class="eyebrow light">Planejem juntos</p>
+                <h1>O grande dia começa nos pequenos detalhes.</h1>
+                <p>Um espaço só de vocês para organizar convidados, locais, tarefas e orçamento.</p>
+
+                <div class="shared-account">
+                    <div class="couple-icons" aria-hidden="true">
+                        <span>♡</span>
+                        <span>♡</span>
+                    </div>
+                    <div>
+                        <strong>Uma história, dois acessos</strong>
+                        <p>Os dois e-mails ficam ligados ao mesmo casamento. Tudo que uma pessoa atualizar estará disponível para a outra.</p>
+                    </div>
+                </div>
+            </div>
+
+            <p class="hero-note">Feito para organizar o caminho até o “sim”.</p>
+            <div class="hero-flower hero-flower-one"></div>
+            <div class="hero-flower hero-flower-two"></div>
+        </section>
+
+        <section class="login-area">
+            <div class="mobile-brand" aria-hidden="true">
+                <span class="login-brand-mark">N</span>
+                <span><strong>Nosso</strong><small>casamento</small></span>
+            </div>
+
+            <div class="auth-card">
+                <div class="auth-heading">
+                    <p class="eyebrow">Área do casal</p>
+                    <h2 id="auth-title">Que bom ter vocês aqui</h2>
+                    <p id="auth-description">Entre com qualquer um dos dois e-mails vinculados ao casamento.</p>
+                </div>
+
+                <div class="auth-tabs" role="tablist" aria-label="Escolha entre entrar e criar conta">
+                    <button class="auth-tab active" id="login-tab" data-view="login" type="button" role="tab" aria-selected="true" aria-controls="login-form">Entrar</button>
+                    <button class="auth-tab" id="register-tab" data-view="register" type="button" role="tab" aria-selected="false" aria-controls="register-form">Criar conta</button>
+                </div>
+
+                <div class="auth-message" id="auth-message" role="status" aria-live="polite"></div>
+
+                <form class="auth-form active" id="login-form" role="tabpanel" aria-labelledby="login-tab">
+                    <div class="login-field">
+                        <label for="login-email">Seu e-mail</label>
+                        <div class="input-wrap">
+                            <span class="field-icon" aria-hidden="true">✉</span>
+                            <input id="login-email" name="email" type="email" autocomplete="email" required placeholder="voce@email.com">
+                        </div>
+                    </div>
+
+                    <div class="login-field">
+                        <div class="label-row">
+                            <label for="login-password">Senha</label>
+                            <button class="forgot-button" id="forgot-password" type="button">Esqueci minha senha</button>
+                        </div>
+                        <div class="input-wrap">
+                            <span class="field-icon" aria-hidden="true">◇</span>
+                            <input id="login-password" name="password" type="password" autocomplete="current-password" minlength="6" required placeholder="Digite sua senha">
+                            <button class="password-toggle" data-password-toggle="login-password" type="button" aria-label="Mostrar senha">◉</button>
+                        </div>
+                    </div>
+
+                    <label class="remember-field">
+                        <input name="remember" type="checkbox" checked>
+                        <span>Manter conectado neste dispositivo</span>
+                    </label>
+
+                    <button class="login-submit" type="submit">
+                        <span>Entrar no nosso espaço</span>
+                        <span aria-hidden="true">→</span>
+                    </button>
+                </form>
+
+                <form class="auth-form" id="register-form" role="tabpanel" aria-labelledby="register-tab" hidden>
+                    <div class="form-intro">
+                        <span>♡</span>
+                        <p>Crie o espaço compartilhado do casal. Cada pessoa usará o próprio e-mail para acessar os mesmos dados.</p>
+                    </div>
+
+                    <div class="names-grid">
+                        <div class="login-field">
+                            <label for="register-name">Seu primeiro nome</label>
+                            <div class="input-wrap">
+                                <input id="register-name" name="primaryName" required autocomplete="given-name" placeholder="Ex.: Maria">
+                            </div>
+                        </div>
+                        <div class="login-field">
+                            <label for="partner-name">Nome do companheiro(a)</label>
+                            <div class="input-wrap">
+                                <input id="partner-name" name="partnerName" required placeholder="Ex.: João">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="login-field">
+                        <label for="register-email">Seu e-mail principal</label>
+                        <div class="input-wrap">
+                            <span class="field-icon" aria-hidden="true">✉</span>
+                            <input id="register-email" name="primaryEmail" type="email" autocomplete="email" required placeholder="voce@email.com">
+                        </div>
+                    </div>
+
+                    <div class="login-field">
+                        <label for="partner-email">E-mail do companheiro(a)</label>
+                        <div class="input-wrap">
+                            <span class="field-icon" aria-hidden="true">♡</span>
+                            <input id="partner-email" name="partnerEmail" type="email" required placeholder="companheiro@email.com">
+                        </div>
+                        <small>Esse e-mail será convidado para acessar o mesmo casamento.</small>
+                    </div>
+
+                    <div class="login-field">
+                        <label for="register-password">Crie sua senha</label>
+                        <div class="input-wrap">
+                            <span class="field-icon" aria-hidden="true">◇</span>
+                            <input id="register-password" name="password" type="password" autocomplete="new-password" minlength="8" required placeholder="Mínimo de 8 caracteres">
+                            <button class="password-toggle" data-password-toggle="register-password" type="button" aria-label="Mostrar senha">◉</button>
+                        </div>
+                    </div>
+
+                    <label class="terms-field">
+                        <input name="terms" type="checkbox" required>
+                        <span>Confirmo que tenho autorização para convidar este e-mail.</span>
+                    </label>
+
+                    <button class="login-submit" type="submit">
+                        <span>Criar nosso espaço</span>
+                        <span aria-hidden="true">→</span>
+                    </button>
+                </form>
+
+                <p class="auth-footer">As informações do casamento serão visíveis somente para os dois e-mails vinculados.</p>
+            </div>
+
+            <a class="back-link" href="../visao-geral/index.html">← Voltar para a página inicial</a>
+        </section>
+    </main>
+</body>
+</html>

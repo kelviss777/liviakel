@@ -1,0 +1,13 @@
+.list-controls { display: flex; justify-content: space-between; gap: 14px; padding: 20px; border-bottom: 1px solid var(--line); }
+.search-box { display: flex; align-items: center; gap: 8px; max-width: 330px; padding-block: 0; color: var(--muted); }
+.search-box, .list-controls select { width: 100%; min-height: 43px; padding: 10px 12px; outline: 0; border: 1px solid #ded4d2; border-radius: 8px; background: white; color: var(--ink); }
+.search-box { padding-block: 0; }
+.search-box:focus-within, .list-controls select:focus { border-color: var(--rose); box-shadow: 0 0 0 3px rgba(191,135,152,.13); }
+.search-box input { width: 100%; border: 0; outline: 0; background: transparent; }
+.list-controls select { width: auto; }
+
+@media (max-width: 620px) {
+    .list-controls { display: grid; }
+    .search-box { max-width: none; }
+    .list-controls select { width: 100%; }
+}

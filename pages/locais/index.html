@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#744b61">
+    <title>Nosso Casamento</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../../assets/global.css">
+    <link rel="stylesheet" href="../../components/sidebar.css">
+    <link rel="stylesheet" href="style.css">
+    <script src="../../js/app.js" defer></script>
+    <script src="../../components/sidebar.js" defer></script>
+    <script src="main.js" defer></script>
+</head>
+<body data-page="locais">
+    <div class="app-shell">
+        <aside class="sidebar" id="sidebar-container"></aside>
+
+        <main class="main-content">
+            <header class="topbar">
+                <div>
+                    <p class="eyebrow">Planejamento do casamento</p>
+                    <h1 id="page-title">Locais</h1>
+                </div>
+                <button class="button button-ghost" id="open-settings" type="button">Editar casamento</button>
+            </header>
+
+            <section class="page active" id="locais" aria-labelledby="page-title">
+                <div class="section-toolbar">
+                    <div><p class="section-description">Compare os espaços que vocês estão pensando em fechar.</p></div>
+                    <button class="button button-primary" data-toggle-form="venue-form-card" type="button">+ Adicionar local</button>
+                </div>
+
+                <article class="form-card hidden" id="venue-form-card">
+                    <form id="venue-form">
+                        <div class="field field-grow"><label for="venue-name">Nome do local</label><input id="venue-name" name="name" required placeholder="Ex.: Villa Jardim"></div>
+                        <div class="field"><label for="venue-type">Tipo</label><select id="venue-type" name="type"><option>Espaço para festa</option><option>Igreja</option><option>Cartório</option><option>Buffet</option><option>Hospedagem</option><option>Outro</option></select></div>
+                        <div class="field venue-address-field"><label for="venue-address">Endereço</label><input id="venue-address" name="address" required placeholder="Rua, número, cidade"></div>
+                        <button class="button button-primary form-submit" type="submit">Salvar</button>
+                    </form>
+                </article>
+
+                <div class="venue-tip">
+                    <span>★</span>
+                    <p>Favorite os locais preferidos de vocês. Clique no endereço para abrir diretamente no Google Maps.</p>
+                </div>
+
+                <div class="venue-grid" id="venue-list"></div>
+            </section>
+        </main>
+    </div>
+</body>
+</html>
