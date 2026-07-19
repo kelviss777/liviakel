@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Executando testes</title>
+    <script>
+        const originalLocalState = {
+            settings: {
+                partnerOne: "Configuração antiga",
+                partnerTwo: "do navegador",
+                weddingDate: "2020-01-01"
+            },
+            guests: [{ id: "guest-1", status: "pending" }],
+            venues: [{ id: "venue-1" }],
+            tasks: [{ id: "task-1", done: false }],
+            expenses: [{ id: "expense-1", value: 100 }]
+        };
+        localStorage.setItem(
+            "nosso-casamento-v1",
+            JSON.stringify(originalLocalState)
+        );
+
+        window.testBackend = {
+            mode: "normal",
+            calls: [],
+            wedding: {
+                partner_one: "Ana",
+                partner_two: "Lucas",
+                wedding_date: "2027-05-22"
+            }
+        };
+
+        const client = {
+            auth: {
+                async getUser() {
+                    testBackend.calls.push({ operation: "getUser" });
+                    return {
+                        data: {
+                            user: testBackend.mode === "unauthenticated"
+                                ? null
+                                : { id: "user-123" }
+                        },
+                        error: null
+                    };
+                }
+            },
+            from(table) {
+                testBackend.calls.push({ operation: "from", table });
+
+                if (table === "wedding_members") {
+                    return {
+                        select(columns) {
+                            testBackend.calls.push({
+                                operation: "membership.select",
+                                columns
+                            });
+                            return this;
+                        },
+                        eq(column, value) {
+                            testBackend.calls.push({
+                                operation: "membership.eq",
+                                column,
+                                value
+                            });
+                            return this;
+                        },
+                        async limit(value) {
+                            testBackend.calls.push({
+                                operation: "membership.limit",
+                                value
+                            });
+                            return {
+                                data: testBackend.mode === "missingMembership"
+                                    ? []
+                                    : [{ wedding_id: "wedding-456" }],
+                                error: null
+                            };
+                        }
+                    };
+                }
+
+                if (table === "weddings") {
+                    let updatePayload;
+                    return {
+                        select(columns) {
+                            testBackend.calls.push({
+                                operation: "wedding.select",
+                                columns
+                            });
+                            return this;
+                        },
+                        update(payload) {
+                            updatePayload = payload;
+                            testBackend.calls.push({
+                                operation: "wedding.update",
+                                payload
+                            });
+                            return this;
+                        },
+                        eq(column, value) {
+                            testBackend.calls.push({
+                                operation: "wedding.eq",
+                                column,
+                                value
+                            });
+                            return this;
+                        },
+                        async maybeSingle() {
+                            if (testBackend.mode === "missingWedding" ||
+                                testBackend.mode === "blockedUpdate") {
+                                return { data: null, error: null };
+                            }
+
+                            if (updatePayload) {
+                                testBackend.wedding = { ...updatePayload };
+                            }
+
+                            return {
+                                data: testBackend.wedding,
+                                error: null
+                            };
+                        }
+                    };
+                }
+
+                throw new Error(`Tabela inesperada: ${table}`);
+            }
+        };
+
+        window.supabase = {
+            createClient() {
+                return client;
+            }
+        };
+
+    </script>
+    <script src="../js/supabase.js" defer></script>
+    <script src="../js/app.js" defer></script>
+    <script src="../pages/visao-geral/main.js" defer></script>
+</head>
+<body>
+    <button id="open-settings" type="button">Editar casamento</button>
+    <h1 id="couple-title"></h1>
+    <p id="wedding-date-text"></p>
+    <span id="days-left"></span>
+    <span id="stat-guests"></span>
+    <span id="stat-confirmed"></span>
+    <span id="stat-tasks"></span>
+    <span id="stat-task-detail"></span>
+    <span id="stat-budget"></span>
+    <span id="stat-paid"></span>
+    <span id="progress-ring"></span>
+    <span id="progress-value"></span>
+    <span id="progress-message"></span>
+    <span id="upcoming-tasks"></span>
+    <pre id="results">Aguardando...</pre>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", async () => {
+            const results = [];
+            const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+                results.push(`OK: ${message}`);
+            };
+
+            try {
+                await weddingSettingsPromise;
+
+                assert(
+                    state.settings.partnerOne === "Ana" &&
+                    state.settings.partnerTwo === "Lucas" &&
+                    state.settings.weddingDate === "2027-05-22",
+                    "settings são carregadas do Supabase"
+                );
+                assert(
+                    document.querySelector("#couple-title").textContent ===
+                    "Ana & Lucas",
+                    "os nomes da visão geral são atualizados após a leitura"
+                );
+                assert(
+                    document.querySelector("#wedding-date-text").textContent
+                        .includes("22 de maio de 2027") &&
+                    document.querySelector("#days-left").textContent !== "—",
+                    "a data e a contagem regressiva são atualizadas"
+                );
+                assert(
+                    document.querySelector("#partner-one").value === "Ana" &&
+                    document.querySelector("#partner-two").value === "Lucas" &&
+                    document.querySelector("#wedding-date").value ===
+                    "2027-05-22",
+                    "o formulário recebe os valores carregados"
+                );
+                assert(
+                    state.guests.length === 1 &&
+                    state.venues.length === 1 &&
+                    state.tasks.length === 1 &&
+                    state.expenses.length === 1,
+                    "as quatro áreas locais continuam carregadas"
+                );
+
+                document.querySelector("#open-settings").click();
+                document.querySelector("#partner-one").value = "Bia";
+                document.querySelector("#partner-two").value = "Caio";
+                document.querySelector("#wedding-date").value = "";
+                document.querySelector("#settings-form").requestSubmit();
+
+                await new Promise(resolve => setTimeout(resolve, 50));
+
+                const updateCall = testBackend.calls.find(
+                    call => call.operation === "wedding.update"
+                );
+                assert(
+                    JSON.stringify(updateCall.payload) === JSON.stringify({
+                        partner_one: "Bia",
+                        partner_two: "Caio",
+                        wedding_date: null
+                    }),
+                    "o UPDATE envia somente nomes e data; data vazia vira null"
+                );
+                assert(
+                    testBackend.calls.filter(
+                        call => call.operation === "getUser"
+                    ).length >= 2,
+                    "a sessão é revalidada antes da atualização"
+                );
+                assert(
+                    testBackend.calls.some(
+                        call =>
+                            call.operation === "wedding.eq" &&
+                            call.column === "id" &&
+                            call.value === "wedding-456"
+                    ),
+                    "o UPDATE usa apenas o wedding_id obtido pelo vínculo"
+                );
+                assert(
+                    state.settings.partnerOne === "Bia" &&
+                    state.settings.partnerTwo === "Caio" &&
+                    state.settings.weddingDate === "",
+                    "o estado e a interface são atualizados sem recarregar"
+                );
+                assert(
+                    document.querySelector("#couple-title").textContent ===
+                    "Bia & Caio" &&
+                    document.querySelector("#days-left").textContent === "—",
+                    "nomes e contagem refletem imediatamente a atualização"
+                );
+                assert(
+                    settingsDialog.open === false,
+                    "o modal fecha somente após a confirmação"
+                );
+
+                const subsequentRead = await getCurrentWedding();
+                assert(
+                    subsequentRead.partnerOne === "Bia" &&
+                    subsequentRead.partnerTwo === "Caio" &&
+                    subsequentRead.weddingDate === "",
+                    "uma nova leitura recebe os valores persistidos"
+                );
+
+                state.guests.push({ id: "guest-2" });
+                saveState();
+                const persisted = JSON.parse(
+                    localStorage.getItem("nosso-casamento-v1")
+                );
+                assert(
+                    persisted.settings.partnerOne ===
+                    originalLocalState.settings.partnerOne,
+                    "saveState não sobrescreve settings com dados do Supabase"
+                );
+                assert(
+                    persisted.guests.length === 2 &&
+                    persisted.venues.length === 1 &&
+                    persisted.tasks.length === 1 &&
+                    persisted.expenses.length === 1,
+                    "saveState preserva guests, venues, tasks e expenses"
+                );
+
+                testBackend.mode = "missingMembership";
+                await assertRejectCode(
+                    getCurrentWedding(),
+                    "WEDDING_MEMBERSHIP_NOT_FOUND"
+                );
+                results.push("OK: ausência de vínculo produz erro claro");
+
+                testBackend.mode = "missingWedding";
+                await assertRejectCode(
+                    getCurrentWedding(),
+                    "WEDDING_NOT_FOUND"
+                );
+                results.push("OK: casamento inexistente produz erro claro");
+
+                testBackend.mode = "blockedUpdate";
+                await assertRejectCode(
+                    updateCurrentWedding({
+                        partnerOne: "Bia",
+                        partnerTwo: "Caio",
+                        weddingDate: "2027-08-10"
+                    }),
+                    "WEDDING_UPDATE_NOT_ALLOWED"
+                );
+                results.push("OK: UPDATE com zero linhas não é confirmado");
+
+                testBackend.mode = "unauthenticated";
+                await assertRejectCode(
+                    getCurrentWedding(),
+                    "AUTH_REQUIRED"
+                );
+                results.push("OK: usuário sem sessão recebe AUTH_REQUIRED");
+
+                document.title = "TESTS PASSED";
+                document.querySelector("#results").textContent =
+                    `PASS (${results.length})\n${results.join("\n")}`;
+            } catch (error) {
+                document.title = "TESTS FAILED";
+                document.querySelector("#results").textContent =
+                    `FAIL\n${error.stack || error.message}`;
+            }
+        });
+
+        async function assertRejectCode(promise, expectedCode) {
+            try {
+                await promise;
+            } catch (error) {
+                if (error.code === expectedCode) return;
+                throw error;
+            }
+
+            throw new Error(`Esperava rejeição com ${expectedCode}`);
+        }
+    </script>
+</body>
+</html>

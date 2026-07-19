@@ -51,6 +51,147 @@ async function getSupabaseClient() {
     return supabaseClient;
 }
 
+function createSupabaseAppError(message, code) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+}
+
+async function getAuthenticatedUser() {
+    const client = await getSupabaseClient();
+    const { data, error } = await client.auth.getUser();
+
+    if (error) {
+        throw createSupabaseAppError(
+            "Não foi possível validar sua sessão. Entre novamente.",
+            "AUTH_REQUIRED"
+        );
+    }
+
+    if (!data.user) {
+        throw createSupabaseAppError(
+            "Sua sessão terminou. Entre novamente para continuar.",
+            "AUTH_REQUIRED"
+        );
+    }
+
+    return data.user;
+}
+
+async function resolveCurrentWeddingContext() {
+    const client = await getSupabaseClient();
+    const user = await getAuthenticatedUser();
+    const { data: memberships, error: membershipError } = await client
+        .from("wedding_members")
+        .select("wedding_id")
+        .eq("user_id", user.id)
+        .limit(2);
+
+    if (membershipError) {
+        throw createSupabaseAppError(
+            "Não foi possível localizar o vínculo do seu casamento. Verifique as permissões de acesso.",
+            "MEMBERSHIP_QUERY_FAILED"
+        );
+    }
+
+    if (!memberships?.length || !memberships[0].wedding_id) {
+        throw createSupabaseAppError(
+            "Sua conta ainda não está vinculada a um casamento. Conclua o cadastro do casal antes de continuar.",
+            "WEDDING_MEMBERSHIP_NOT_FOUND"
+        );
+    }
+
+    if (memberships.length > 1) {
+        throw createSupabaseAppError(
+            "Sua conta está vinculada a mais de um casamento. Esta versão aceita apenas um vínculo.",
+            "MULTIPLE_WEDDING_MEMBERSHIPS"
+        );
+    }
+
+    return {
+        user,
+        weddingId: memberships[0].wedding_id
+    };
+}
+
+function mapWeddingRecord(record) {
+    return {
+        partnerOne: record.partner_one ?? "",
+        partnerTwo: record.partner_two ?? "",
+        weddingDate: record.wedding_date ?? ""
+    };
+}
+
+async function getCurrentWedding() {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    const { data, error } = await client
+        .from("weddings")
+        .select("partner_one, partner_two, wedding_date")
+        .eq("id", weddingId)
+        .maybeSingle();
+
+    if (error) {
+        throw createSupabaseAppError(
+            "Não foi possível carregar as configurações do casamento. Verifique as permissões de acesso.",
+            "WEDDING_QUERY_FAILED"
+        );
+    }
+
+    if (!data) {
+        throw createSupabaseAppError(
+            "O vínculo da sua conta existe, mas o casamento correspondente não foi encontrado.",
+            "WEDDING_NOT_FOUND"
+        );
+    }
+
+    return mapWeddingRecord(data);
+}
+
+async function updateCurrentWedding({ partnerOne, partnerTwo, weddingDate }) {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    const normalizedSettings = {
+        partnerOne: String(partnerOne ?? "").trim(),
+        partnerTwo: String(partnerTwo ?? "").trim(),
+        weddingDate: String(weddingDate ?? "").trim()
+    };
+
+    if (!normalizedSettings.partnerOne || !normalizedSettings.partnerTwo) {
+        throw createSupabaseAppError(
+            "Preencha os dois nomes antes de salvar.",
+            "WEDDING_VALIDATION_FAILED"
+        );
+    }
+
+    const { data, error } = await client
+        .from("weddings")
+        .update({
+            partner_one: normalizedSettings.partnerOne,
+            partner_two: normalizedSettings.partnerTwo,
+            wedding_date: normalizedSettings.weddingDate || null
+        })
+        .eq("id", weddingId)
+        .select("partner_one, partner_two, wedding_date")
+        .maybeSingle();
+
+    if (error) {
+        throw createSupabaseAppError(
+            "Não foi possível salvar as informações do casamento. Verifique sua conexão e as permissões de acesso.",
+            "WEDDING_UPDATE_FAILED"
+        );
+    }
+
+    if (!data) {
+        throw createSupabaseAppError(
+            "O casamento não pôde ser atualizado. Verifique se sua conta ainda possui acesso e se as políticas RLS permitem a alteração.",
+            "WEDDING_UPDATE_NOT_ALLOWED"
+        );
+    }
+
+    return mapWeddingRecord(data);
+}
+
 async function signInCouple({ email, password }) {
     const client = await getSupabaseClient();
     const { data, error } = await client.auth.signInWithPassword({
