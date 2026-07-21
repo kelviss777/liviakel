@@ -36,11 +36,155 @@
                 </div>
 
                 <article class="form-card hidden" id="venue-form-card">
-                    <form id="venue-form">
-                        <div class="field field-grow"><label for="venue-name">Nome do local</label><input id="venue-name" name="name" required placeholder="Ex.: Villa Jardim"></div>
-                        <div class="field"><label for="venue-type">Tipo</label><select id="venue-type" name="type"><option>Espaço para festa</option><option>Igreja</option><option>Cartório</option><option>Buffet</option><option>Hospedagem</option><option>Outro</option></select></div>
-                        <div class="field venue-address-field"><label for="venue-address">Endereço</label><input id="venue-address" name="address" required placeholder="Rua, número, cidade"></div>
-                        <button class="button button-primary form-submit" type="submit">Salvar</button>
+                    <form id="venue-form" novalidate>
+                        <div class="venue-primary-fields">
+                            <div class="field field-grow">
+                                <label for="venue-name">Nome do local</label>
+                                <input id="venue-name" name="name" required placeholder="Ex.: Villa Jardim">
+                            </div>
+                            <div class="field">
+                                <label for="venue-type">Tipo</label>
+                                <select id="venue-type" name="type" required>
+                                    <option>Espaço para festa</option>
+                                    <option>Igreja</option>
+                                    <option>Cartório</option>
+                                    <option>Buffet</option>
+                                    <option>Hospedagem</option>
+                                    <option>Outro</option>
+                                </select>
+                            </div>
+                            <div class="field venue-address-field">
+                                <label for="venue-address">Endereço</label>
+                                <input id="venue-address" name="address" required placeholder="Rua, número, cidade">
+                            </div>
+                        </div>
+
+                        <button class="details-toggle" id="venue-details-toggle" type="button" aria-expanded="false" aria-controls="venue-details-fields">
+                            <span class="details-toggle-label">Adicionar opções detalhadas</span>
+                            <span class="details-toggle-icon" aria-hidden="true">⌄</span>
+                        </button>
+
+                        <div class="venue-details-fields" id="venue-details-fields" hidden>
+                            <fieldset class="detail-section">
+                                <legend>Avaliação do casal</legend>
+                                <div class="detail-fields-grid">
+                                    <div class="field detail-field-full">
+                                        <label for="venue-description">Descrição detalhada do local</label>
+                                        <textarea id="venue-description" name="description" rows="4" placeholder="Registrem tudo o que acharam do local"></textarea>
+                                    </div>
+
+                                    <fieldset class="rating-field detail-field-full">
+                                        <legend>Avaliação do local</legend>
+                                        <div class="rating-control">
+                                            <div class="rating-options" role="radiogroup" aria-label="Avaliação do local de uma a cinco estrelas">
+                                                <span class="rating-choice"><input id="venue-rating-1" name="rating" type="radio" value="1"><label data-rating-value="1" for="venue-rating-1" title="1 estrela"><span aria-hidden="true">★</span><span class="visually-hidden">1 estrela</span></label></span>
+                                                <span class="rating-choice"><input id="venue-rating-2" name="rating" type="radio" value="2"><label data-rating-value="2" for="venue-rating-2" title="2 estrelas"><span aria-hidden="true">★</span><span class="visually-hidden">2 estrelas</span></label></span>
+                                                <span class="rating-choice"><input id="venue-rating-3" name="rating" type="radio" value="3"><label data-rating-value="3" for="venue-rating-3" title="3 estrelas"><span aria-hidden="true">★</span><span class="visually-hidden">3 estrelas</span></label></span>
+                                                <span class="rating-choice"><input id="venue-rating-4" name="rating" type="radio" value="4"><label data-rating-value="4" for="venue-rating-4" title="4 estrelas"><span aria-hidden="true">★</span><span class="visually-hidden">4 estrelas</span></label></span>
+                                                <span class="rating-choice"><input id="venue-rating-5" name="rating" type="radio" value="5"><label data-rating-value="5" for="venue-rating-5" title="5 estrelas"><span aria-hidden="true">★</span><span class="visually-hidden">5 estrelas</span></label></span>
+                                            </div>
+                                            <button class="rating-clear" id="clear-venue-rating" type="button" disabled>Remover avaliação</button>
+                                        </div>
+                                        <p class="field-help" id="venue-rating-status" aria-live="polite">Sem avaliação selecionada.</p>
+                                    </fieldset>
+
+                                    <div class="field">
+                                        <label for="venue-pros">Prós</label>
+                                        <textarea id="venue-pros" name="pros" rows="3" placeholder="O que mais agradou vocês"></textarea>
+                                    </div>
+                                    <div class="field">
+                                        <label for="venue-cons">Contras</label>
+                                        <textarea id="venue-cons" name="cons" rows="3" placeholder="Pontos que merecem atenção"></textarea>
+                                    </div>
+                                </div>
+                            </fieldset>
+
+                            <fieldset class="detail-section">
+                                <legend>Orçamento</legend>
+                                <div class="detail-fields-grid">
+                                    <div class="field">
+                                        <label for="venue-budget">Valor total do orçamento</label>
+                                        <div class="currency-input">
+                                            <span aria-hidden="true">R$</span>
+                                            <input id="venue-budget" name="budgetValue" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00">
+                                        </div>
+                                    </div>
+                                    <div class="field">
+                                        <label for="venue-deposit">Valor da entrada solicitada</label>
+                                        <div class="currency-input">
+                                            <span aria-hidden="true">R$</span>
+                                            <input id="venue-deposit" name="depositValue" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00" aria-describedby="venue-deposit-error">
+                                        </div>
+                                        <p class="field-error-message" id="venue-deposit-error" aria-live="polite"></p>
+                                    </div>
+                                    <output class="budget-remaining detail-field-full" id="venue-budget-remaining" hidden>
+                                        <span>Valor restante</span>
+                                        <strong>R$ 0,00</strong>
+                                    </output>
+                                </div>
+                            </fieldset>
+
+                            <fieldset class="detail-section">
+                                <legend>Estrutura do local</legend>
+                                <div class="detail-fields-grid">
+                                    <div class="field">
+                                        <label for="venue-decoration">Decoração</label>
+                                        <select id="venue-decoration" name="decorationOption">
+                                            <option value="unknown">Ainda não informado</option>
+                                            <option value="included">Decoração inclusa</option>
+                                            <option value="separate">Decoração disponível à parte</option>
+                                            <option value="none">Não possui decoração</option>
+                                        </select>
+                                    </div>
+                                    <div class="field">
+                                        <label for="venue-capacity">Capacidade máxima</label>
+                                        <input id="venue-capacity" name="capacity" type="number" min="0" step="1" inputmode="numeric" placeholder="Ex.: 200">
+                                    </div>
+                                    <div class="field">
+                                        <label for="venue-space-availability">Tipo de espaço disponível</label>
+                                        <select id="venue-space-availability" name="spaceAvailability">
+                                            <option value="unknown">Ainda não informado</option>
+                                            <option value="ceremony_and_reception">Cerimônia e salão de festas</option>
+                                            <option value="ceremony_only">Somente cerimônia</option>
+                                            <option value="reception_only">Somente salão de festas</option>
+                                        </select>
+                                    </div>
+                                    <div class="checkbox-stack">
+                                        <label class="checkbox-field" for="venue-bridal-room">
+                                            <input id="venue-bridal-room" name="hasBridalRoom" type="checkbox">
+                                            <span>Possui espaço para a noiva</span>
+                                        </label>
+                                        <label class="checkbox-field" for="venue-parking">
+                                            <input id="venue-parking" name="hasParking" type="checkbox">
+                                            <span>Possui estacionamento</span>
+                                        </label>
+                                    </div>
+                                </div>
+                            </fieldset>
+
+                            <fieldset class="detail-section">
+                                <legend>Disponibilidade e horários</legend>
+                                <div class="detail-fields-grid">
+                                    <div class="field">
+                                        <label for="venue-start-time">Horário de início</label>
+                                        <input id="venue-start-time" name="startTime" type="time">
+                                    </div>
+                                    <div class="field">
+                                        <label for="venue-end-time">Horário de encerramento</label>
+                                        <input id="venue-end-time" name="endTime" type="time" aria-describedby="venue-time-help">
+                                    </div>
+                                    <div class="field detail-field-full">
+                                        <label for="venue-available-date">Data disponível para o casamento</label>
+                                        <input id="venue-available-date" name="availableDate" type="date">
+                                    </div>
+                                </div>
+                                <p class="field-help" id="venue-time-help">Se o encerramento for antes do início, consideraremos que o evento termina após a meia-noite.</p>
+                            </fieldset>
+                        </div>
+
+                        <div class="venue-form-actions">
+                            <button class="button button-primary form-submit" type="submit">Salvar</button>
+                        </div>
                     </form>
                 </article>
 
@@ -53,5 +197,22 @@
             </section>
         </main>
     </div>
+
+    <dialog class="venue-details-dialog" id="venue-details-dialog" aria-labelledby="venue-details-title">
+        <article>
+            <header class="venue-dialog-header">
+                <div>
+                    <p class="eyebrow" id="venue-details-subtitle"></p>
+                    <h2 id="venue-details-title"></h2>
+                </div>
+                <button class="icon-button" data-action="close-venue-details" type="button" aria-label="Fechar detalhes">×</button>
+            </header>
+            <div class="venue-dialog-content" id="venue-details-content"></div>
+            <footer class="venue-dialog-actions">
+                <a class="button button-ghost" id="venue-details-map-link" target="_blank" rel="noopener noreferrer">Abrir no Google Maps</a>
+                <button class="button button-primary" id="venue-details-favorite" data-action="toggle-favorite" type="button"></button>
+            </footer>
+        </article>
+    </dialog>
 </body>
 </html>
