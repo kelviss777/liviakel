@@ -437,6 +437,14 @@ async function deleteCurrentWeddingVenue(venueId) {
     return { id: String(data.id) };
 }
 
+Object.assign(globalThis, {
+    listCurrentWeddingVenues,
+    createCurrentWeddingVenue,
+    updateCurrentWeddingVenue,
+    updateCurrentWeddingVenueFavorite,
+    deleteCurrentWeddingVenue
+});
+
 async function signInCouple({ email, password }) {
     const client = await getSupabaseClient();
     const { data, error } = await client.auth.signInWithPassword({

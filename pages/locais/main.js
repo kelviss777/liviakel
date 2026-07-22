@@ -746,7 +746,7 @@ async function confirmVenueDelete() {
     const id = pendingDeleteVenueId;
 
     try {
-        await deleteCurrentWeddingVenue(id);
+        await callVenueApi("deleteCurrentWeddingVenue", id);
         state.venues = state.venues.filter(item => String(item.id) !== id);
 
         if (editingVenueId === id) {
@@ -778,7 +778,8 @@ function clearDeleteDialogState() {
 }
 
 function reportVenueOperationError(action, error) {
-    console.error(`[Locais] Não foi possível ${action}.`, error?.cause || error);
+    console.error(`[Locais] Não foi possível ${action}.`, error);
+    if (error?.cause) console.error("[Locais] Causa original da operação:", error.cause);
 
     if (error?.code === "AUTH_REQUIRED" && typeof redirectToLogin === "function") {
         redirectToLogin();
@@ -786,6 +787,84 @@ function reportVenueOperationError(action, error) {
     }
 
     showToast(error?.message || `Não foi possível ${action}. Tente novamente.`);
+}
+
+function getVenueApiFunction(name) {
+    const operation = globalThis[name];
+    if (typeof operation === "function") return operation;
+
+    const error = new Error(
+        "Os recursos de locais não foram carregados corretamente. Atualize a página para buscar a versão mais recente."
+    );
+    error.code = "VENUE_API_UNAVAILABLE";
+    return () => Promise.reject(error);
+}
+
+function callVenueApi(name, ...args) {
+    return getVenueApiFunction(name)(...args);
+}
+
+function upsertVenueInMemory(venue, { prepend = false } = {}) {
+    const normalizedVenue = normalizeVenue(venue);
+    const venueIndex = state.venues.findIndex(
+        item => String(item.id) === String(normalizedVenue.id)
+    );
+
+    if (venueIndex >= 0) {
+        state.venues[venueIndex] = normalizedVenue;
+    } else if (prepend) {
+        state.venues.unshift(normalizedVenue);
+    } else {
+        state.venues.push(normalizedVenue);
+    }
+}
+
+async function reloadVenueStateFromSupabase() {
+    const { venues } = await callVenueApi("listCurrentWeddingVenues");
+    state.venues = venues.map(normalizeVenue);
+    renderAll();
+}
+
+async function finishVenueSaveAfterRemoteSuccess(venue, { prepend, successMessage }) {
+    try {
+        upsertVenueInMemory(venue, { prepend });
+        renderAll();
+        resetVenueForm();
+        venueFormCard.classList.add("hidden");
+        showToast(successMessage);
+        return;
+    } catch (interfaceError) {
+        console.error(
+            "[Locais] O Supabase confirmou a gravação, mas a interface falhou ao aplicar a resposta.",
+            interfaceError
+        );
+    }
+
+    let reloadFailed = false;
+    try {
+        await reloadVenueStateFromSupabase();
+    } catch (reloadError) {
+        reloadFailed = true;
+        console.error(
+            "[Locais] Não foi possível recarregar os locais depois da gravação confirmada.",
+            reloadError
+        );
+    }
+
+    try {
+        resetVenueForm();
+        venueFormCard.classList.add("hidden");
+    } catch (resetError) {
+        console.error("[Locais] Não foi possível finalizar o formulário após a gravação.", resetError);
+    }
+
+    try {
+        showToast(reloadFailed
+            ? "O local foi salvo no banco. Atualize a página para recarregar a lista."
+            : successMessage);
+    } catch (toastError) {
+        console.error("[Locais] Não foi possível exibir a confirmação da gravação.", toastError);
+    }
 }
 
 function refreshOpenVenueDetails() {
@@ -806,7 +885,7 @@ async function toggleVenueFavorite(id) {
     refreshOpenVenueDetails();
 
     try {
-        const updatedVenue = await updateCurrentWeddingVenueFavorite(venue.id, nextFavorite);
+        const updatedVenue = await callVenueApi("updateCurrentWeddingVenueFavorite", venue.id, nextFavorite);
         const currentIndex = state.venues.findIndex(item => String(item.id) === String(id));
         if (currentIndex >= 0) state.venues[currentIndex] = normalizeVenue(updatedVenue);
     } catch (error) {
@@ -876,7 +955,7 @@ async function migrateLegacyVenues(weddingId, remoteVenues) {
         if (knownVenues.has(identity)) continue;
 
         try {
-            const createdVenue = normalizeVenue(await createCurrentWeddingVenue(normalizedVenue));
+            const createdVenue = normalizeVenue(await callVenueApi("createCurrentWeddingVenue", normalizedVenue));
             remoteVenues.push(createdVenue);
             knownVenues.add(identity);
             importedCount += 1;
@@ -902,7 +981,7 @@ async function initializeVenues() {
     let remoteLoaded = false;
 
     try {
-        const { weddingId, venues } = await listCurrentWeddingVenues();
+        const { weddingId, venues } = await callVenueApi("listCurrentWeddingVenues");
         state.venues = venues.map(normalizeVenue);
         remoteLoaded = true;
 
@@ -1025,12 +1104,11 @@ venueForm.addEventListener("submit", async event => {
         };
 
         try {
-            const updatedVenue = await updateCurrentWeddingVenue(currentVenue.id, venueDraft);
-            state.venues[venueIndex] = normalizeVenue(updatedVenue);
-            renderAll();
-            resetVenueForm();
-            venueFormCard.classList.add("hidden");
-            showToast("Local atualizado com sucesso.");
+            const updatedVenue = await callVenueApi("updateCurrentWeddingVenue", currentVenue.id, venueDraft);
+            await finishVenueSaveAfterRemoteSuccess(updatedVenue, {
+                prepend: false,
+                successMessage: "Local atualizado com sucesso."
+            });
         } catch (error) {
             reportVenueOperationError("atualizar o local", error);
         } finally {
@@ -1047,12 +1125,11 @@ venueForm.addEventListener("submit", async event => {
     };
 
     try {
-        const createdVenue = await createCurrentWeddingVenue(venueDraft);
-        state.venues.unshift(normalizeVenue(createdVenue));
-        renderAll();
-        resetVenueForm();
-        venueFormCard.classList.add("hidden");
-        showToast("Local adicionado.");
+        const createdVenue = await callVenueApi("createCurrentWeddingVenue", venueDraft);
+        await finishVenueSaveAfterRemoteSuccess(createdVenue, {
+            prepend: true,
+            successMessage: "Local adicionado."
+        });
     } catch (error) {
         reportVenueOperationError("adicionar o local", error);
     } finally {

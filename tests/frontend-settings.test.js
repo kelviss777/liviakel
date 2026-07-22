@@ -305,11 +305,11 @@ test("todas as páginas internas carregam Supabase antes do app", () => {
             path.join(projectRoot, "pages", page, "index.html"),
             "utf8"
         );
-        const supabasePosition = html.indexOf(
-            '<script src="../../js/supabase.js" defer></script>'
+        const supabasePosition = html.search(
+            /<script src="\.\.\/\.\.\/js\/supabase\.js(?:\?[^\"]+)?" defer><\/script>/
         );
-        const appPosition = html.indexOf(
-            '<script src="../../js/app.js" defer></script>'
+        const appPosition = html.search(
+            /<script src="\.\.\/\.\.\/js\/app\.js(?:\?[^\"]+)?" defer><\/script>/
         );
 
         assert.ok(supabasePosition >= 0, `${page} não carrega supabase.js`);
