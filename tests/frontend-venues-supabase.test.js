@@ -139,6 +139,16 @@ function evaluate(context, expression) {
     return vm.runInContext(expression, context);
 }
 
+test("expõe uma única função global de INSERT para scripts clássicos", () => {
+    const context = loadSupabaseFunctions(createVenueClient());
+    assert.equal(typeof context.createCurrentWeddingVenue, "function");
+    assert.equal(
+        (supabaseSource.match(/async function createCurrentWeddingVenue\s*\(/g) || []).length,
+        1
+    );
+    assert.equal((supabaseSource.match(/\.insert\(\{ \.\.\.payload, wedding_id: weddingId \}\)/g) || []).length, 1);
+});
+
 test("converte snake_case do banco para o modelo completo da interface", () => {
     const context = loadSupabaseFunctions(createVenueClient());
     const mapped = evaluate(context, `mapVenueDatabaseRecord({
@@ -313,4 +323,3 @@ test("não executa operação de venues sem usuário autenticado", async () => {
     );
     assert.equal(client.calls.some(call => call.operation === "list"), false);
 });
-

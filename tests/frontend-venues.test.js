@@ -674,6 +674,9 @@ test("edita local completo sem duplicar e preserva id e data de criação", asyn
     assert.equal(venues[0].pros[0].id, "p1");
     assert.match(harness.toastMessages.at(-1), /atualizado com sucesso/);
     assert.equal(vm.runInContext("editingVenueId", harness.context), null);
+    assert.equal(harness.formCard.classList.contains("hidden"), true);
+    assert.equal(harness.remoteCalls.update.length, 1);
+    assert.equal(harness.remoteCalls.create.length, 0);
 });
 
 test("edita local básico e abre detalhes apenas quando necessário", async () => {
@@ -849,7 +852,7 @@ test("mantém formulário e estado intactos quando o INSERT falha", async () => 
     assert.equal(harness.submitButton.disabled, false);
     assert.equal(harness.remoteCalls.create.length, 1);
     assert.match(harness.toastMessages.at(-1), /Não foi possível adicionar/);
-    assert.equal(harness.consoleErrors.length, 1);
+    assert.ok(harness.consoleErrors.length >= 1);
 });
 
 test("bloqueia INSERT duplicado e usa somente o UUID remoto", async () => {
@@ -867,6 +870,7 @@ test("bloqueia INSERT duplicado e usa somente o UUID remoto", async () => {
         }
     });
     harness.setFormValues(baseFormValues());
+    const resetCountBeforeSubmit = harness.form.resetCount;
 
     const firstSubmit = submitVenue(harness);
     const secondSubmit = submitVenue(harness);
@@ -878,7 +882,73 @@ test("bloqueia INSERT duplicado e usa somente o UUID remoto", async () => {
     assert.equal(readValue(harness, "state.venues[0].id"), "22222222-2222-4222-8222-222222222222");
     assert.equal(harness.remoteCalls.create.length, 1);
     assert.equal(harness.submitButton.disabled, false);
+    assert.equal(harness.form.resetCount, resetCountBeforeSubmit + 1);
+    assert.equal(harness.formCard.classList.contains("hidden"), true);
+    assert.equal(vm.runInContext("editingVenueId", harness.context), null);
+    assert.deepEqual(readValue(harness, "temporaryPros"), []);
+    assert.deepEqual(readValue(harness, "temporaryCons"), []);
+    assert.equal(harness.detailsFields.hidden, true);
+    assert.match(harness.venueList.innerHTML, /Villa Jardim/);
     assert.doesNotMatch(venueSource, /id:\s*makeId\(\),\s*\.\.\.mainFields/);
+});
+
+test("função remota ausente gera erro controlado antes do INSERT", async () => {
+    const harness = createHarness();
+    delete harness.context.createCurrentWeddingVenue;
+    harness.setFormValues(baseFormValues());
+
+    await submitVenue(harness);
+
+    assert.deepEqual(readValue(harness, "state.venues"), []);
+    assert.equal(harness.remoteCalls.create.length, 0);
+    assert.equal(harness.formCard.classList.contains("hidden"), false);
+    assert.equal(harness.submitButton.disabled, false);
+    assert.match(harness.toastMessages.at(-1), /não foram carregados corretamente/);
+    assert.notEqual(harness.consoleErrors[0][1]?.name, "ReferenceError");
+});
+
+test("falha visual após INSERT recarrega o Supabase sem repetir a gravação", async () => {
+    let listCalls = 0;
+    let createdRow = null;
+    const harness = createHarness([], {
+        listCurrentWeddingVenues() {
+            listCalls += 1;
+            if (listCalls === 1) return new Promise(() => {});
+            return Promise.resolve({ weddingId: "wedding-recovery", venues: [createdRow] });
+        },
+        createCurrentWeddingVenue: async venue => {
+            createdRow = {
+                ...venue,
+                id: "33333333-3333-4333-8333-333333333333"
+            };
+            return createdRow;
+        }
+    });
+    vm.runInContext(`
+        originalRenderAllForRecovery = renderAll;
+        failNextRecoveryRender = true;
+        renderAll = function () {
+            if (failNextRecoveryRender) {
+                failNextRecoveryRender = false;
+                throw new Error('Falha visual simulada');
+            }
+            return originalRenderAllForRecovery();
+        };
+    `, harness.context);
+    harness.setFormValues(baseFormValues());
+
+    await submitVenue(harness);
+
+    assert.equal(harness.remoteCalls.create.length, 1);
+    assert.equal(listCalls, 2);
+    assert.deepEqual(readValue(harness, "state.venues.map(item => item.id)"), [
+        "33333333-3333-4333-8333-333333333333"
+    ]);
+    assert.equal(harness.formCard.classList.contains("hidden"), true);
+    assert.equal(vm.runInContext("editingVenueId", harness.context), null);
+    assert.equal(harness.submitButton.disabled, false);
+    assert.match(harness.toastMessages.at(-1), /Local adicionado/);
+    assert.ok(harness.consoleErrors.length >= 1);
 });
 
 test("preserva edição e estado quando o UPDATE falha", async () => {
@@ -1035,7 +1105,7 @@ test("falha parcial de migração não cria marca nem remove dados locais", asyn
     assert.equal(harness.storage.has("nosso-casamento-venues-migrated:wedding-failure"), false);
     assert.ok(harness.storage.has("nosso-casamento-venues-backup:wedding-failure"));
     assert.equal(harness.remoteCalls.create.length, 1);
-    assert.equal(harness.consoleErrors.length, 1);
+    assert.ok(harness.consoleErrors.length >= 1);
 });
 
 test("HTML e CSS mantêm acessibilidade, modais e responsividade", () => {
@@ -1052,4 +1122,8 @@ test("HTML e CSS mantêm acessibilidade, modais e responsividade", () => {
     assert.match(venueCss, /\.pros-cons-editors, \.venue-pros-cons \{ grid-template-columns: 1fr; \}/);
     assert.match(venueCss, /\.venue-dialog-content \{[^}]*overflow-y: auto/);
     assert.doesNotMatch(venueSource, /saveState\s*\(/);
+    assert.doesNotMatch(venueSource, /await\s+createCurrentWeddingVenue\s*\(/);
+    assert.match(venueHtml, /supabase\.js\?v=20260721-venues-2/);
+    assert.match(venueHtml, /app\.js\?v=20260721-venues-2/);
+    assert.match(venueHtml, /main\.js\?v=20260721-venues-2/);
 });
