@@ -11,8 +11,8 @@ const VENUE_DETAIL_DEFAULTS = Object.freeze({
     startTime: "",
     endTime: "",
     availableDate: "",
-    pros: "",
-    cons: ""
+    pros: [],
+    cons: []
 });
 
 const DECORATION_LABELS = {
@@ -30,9 +30,11 @@ const SPACE_LABELS = {
 };
 
 const venueForm = document.querySelector("#venue-form");
+const venueFormCard = document.querySelector("#venue-form-card");
 const venueDetailsToggle = document.querySelector("#venue-details-toggle");
 const venueDetailsFields = document.querySelector("#venue-details-fields");
 const venueDetailsDialog = document.querySelector("#venue-details-dialog");
+const venueDeleteDialog = document.querySelector("#venue-delete-dialog");
 const ratingInputs = [...document.querySelectorAll("input[name='rating']")];
 const ratingLabels = [...document.querySelectorAll("[data-rating-value]")];
 const clearRatingButton = document.querySelector("#clear-venue-rating");
@@ -41,6 +43,39 @@ const budgetInput = document.querySelector("#venue-budget");
 const depositInput = document.querySelector("#venue-deposit");
 const depositError = document.querySelector("#venue-deposit-error");
 const budgetRemaining = document.querySelector("#venue-budget-remaining");
+const venueSubmitButton = document.querySelector("#venue-submit-button");
+const cancelVenueEditButton = document.querySelector("#cancel-venue-edit");
+const venueEditNotice = document.querySelector("#venue-edit-notice");
+const confirmVenueDeleteButton = document.querySelector("#confirm-venue-delete");
+
+const LIST_EDITOR_CONFIG = {
+    pros: {
+        singular: "pró",
+        emptyMessage: "Nenhum pró adicionado.",
+        titleInput: document.querySelector("#venue-pro-title"),
+        descriptionInput: document.querySelector("#venue-pro-description"),
+        submitButton: document.querySelector("#submit-pro-item"),
+        cancelButton: document.querySelector("#cancel-pro-edit"),
+        list: document.querySelector("#venue-pros-list")
+    },
+    cons: {
+        singular: "contra",
+        emptyMessage: "Nenhum contra adicionado.",
+        titleInput: document.querySelector("#venue-con-title"),
+        descriptionInput: document.querySelector("#venue-con-description"),
+        submitButton: document.querySelector("#submit-con-item"),
+        cancelButton: document.querySelector("#cancel-con-edit"),
+        list: document.querySelector("#venue-cons-list")
+    }
+};
+
+let temporaryPros = [];
+let temporaryCons = [];
+let editingVenueId = null;
+let editingListItemIds = { pros: null, cons: null };
+let pendingDeleteVenueId = null;
+let deleteTriggerElement = null;
+let deleteInProgress = false;
 
 function optionalNumber(value, { integer = false, maximum = Infinity } = {}) {
     if (value === null || value === undefined || value === "") return null;
@@ -52,6 +87,41 @@ function optionalNumber(value, { integer = false, maximum = Infinity } = {}) {
 
 function normalizeText(value) {
     return typeof value === "string" ? value : "";
+}
+
+function normalizeStructuredList(value, type) {
+    const source = typeof value === "string"
+        ? (value.trim() ? [{ title: "Observação", description: value.trim() }] : [])
+        : (Array.isArray(value) ? value : []);
+    const usedIds = new Set();
+
+    return source.map((entry, index) => {
+        const rawEntry = typeof entry === "string"
+            ? { title: "Observação", description: entry }
+            : (entry && typeof entry === "object" ? entry : {});
+        const title = normalizeText(rawEntry.title).trim();
+        const description = normalizeText(rawEntry.description).trim();
+        if (!title && !description) return null;
+
+        const baseId = normalizeText(rawEntry.id).trim() || `legacy-${type}-${index + 1}`;
+        let id = baseId;
+        let suffix = 2;
+        while (usedIds.has(id)) {
+            id = `${baseId}-${suffix}`;
+            suffix += 1;
+        }
+        usedIds.add(id);
+
+        return {
+            id,
+            title: title || "Observação",
+            description
+        };
+    }).filter(Boolean);
+}
+
+function cloneStructuredList(items) {
+    return items.map(item => ({ ...item }));
 }
 
 function normalizeVenue(venue = {}) {
@@ -82,8 +152,8 @@ function normalizeVenue(venue = {}) {
         startTime: normalizeText(venue.startTime),
         endTime: normalizeText(venue.endTime),
         availableDate: normalizeText(venue.availableDate),
-        pros: normalizeText(venue.pros),
-        cons: normalizeText(venue.cons)
+        pros: normalizeStructuredList(venue.pros, "pros"),
+        cons: normalizeStructuredList(venue.cons, "cons")
     };
 }
 
@@ -106,8 +176,8 @@ function hasDetailedInfo(venue) {
         item.startTime ||
         item.endTime ||
         item.availableDate ||
-        item.pros.trim() ||
-        item.cons.trim()
+        item.pros.length ||
+        item.cons.length
     );
 }
 
@@ -159,7 +229,8 @@ function renderVenues() {
                     <span class="favorite-label ${venue.favorite ? "" : "muted"}">${venue.favorite ? "Nosso favorito" : "Em avaliação"}</span>
                     <div class="venue-card-actions">
                         ${detailsButton}
-                        <button class="delete-button" data-action="delete-venue" data-id="${id}" type="button" aria-label="Excluir ${name}">×</button>
+                        <button class="venue-edit-button" data-action="edit-venue" data-id="${id}" type="button">Editar</button>
+                        <button class="delete-button" data-action="request-delete-venue" data-id="${id}" type="button" aria-label="Excluir ${name}" title="Excluir local">×</button>
                     </div>
                 </div>
             </article>`;
@@ -200,6 +271,134 @@ function setRating(value) {
         ? "Sem avaliação selecionada."
         : `${normalizedValue} de 5 ${normalizedValue === 1 ? "estrela selecionada" : "estrelas selecionadas"}.`;
     updateRatingVisual();
+}
+
+function getTemporaryItems(type) {
+    return type === "pros" ? temporaryPros : temporaryCons;
+}
+
+function setTemporaryItems(type, items) {
+    if (type === "pros") temporaryPros = items;
+    else temporaryCons = items;
+}
+
+function resetListEditor(type, { focus = false } = {}) {
+    const config = LIST_EDITOR_CONFIG[type];
+    editingListItemIds[type] = null;
+    config.titleInput.value = "";
+    config.descriptionInput.value = "";
+    clearFieldError(config.titleInput);
+    clearFieldError(config.descriptionInput);
+    config.submitButton.textContent = type === "pros" ? "Adicionar pró" : "Adicionar contra";
+    config.cancelButton.hidden = true;
+    if (focus) config.titleInput.focus();
+}
+
+function renderStructuredList(type) {
+    const config = LIST_EDITOR_CONFIG[type];
+    const items = getTemporaryItems(type);
+    config.list.replaceChildren();
+
+    if (!items.length) {
+        const empty = document.createElement("p");
+        empty.className = "structured-list-empty";
+        empty.textContent = config.emptyMessage;
+        config.list.append(empty);
+        return;
+    }
+
+    items.forEach(item => {
+        const article = document.createElement("article");
+        const title = document.createElement("strong");
+        const description = document.createElement("p");
+        const footer = document.createElement("footer");
+        const editButton = document.createElement("button");
+        const removeButton = document.createElement("button");
+
+        article.className = "structured-list-item";
+        article.classList.toggle("editing", editingListItemIds[type] === item.id);
+        title.textContent = item.title;
+        description.textContent = item.description;
+
+        editButton.className = "structured-item-action";
+        editButton.type = "button";
+        editButton.textContent = "Editar";
+        editButton.dataset.listAction = "edit";
+        editButton.dataset.listType = type;
+        editButton.dataset.itemId = item.id;
+        editButton.setAttribute("aria-label", `Editar ${config.singular} ${item.title}`);
+
+        removeButton.className = "structured-item-action remove";
+        removeButton.type = "button";
+        removeButton.textContent = "Remover";
+        removeButton.dataset.listAction = "remove";
+        removeButton.dataset.listType = type;
+        removeButton.dataset.itemId = item.id;
+        removeButton.setAttribute("aria-label", `Remover ${config.singular} ${item.title}`);
+
+        footer.append(editButton, removeButton);
+        article.append(title, description, footer);
+        config.list.append(article);
+    });
+}
+
+function validateListItem(type) {
+    const config = LIST_EDITOR_CONFIG[type];
+    const title = config.titleInput.value.trim();
+    const description = config.descriptionInput.value.trim();
+
+    if (!title) {
+        markFieldInvalid(config.titleInput, `Informe o tópico do ${config.singular}.`);
+        return null;
+    }
+    if (!description) {
+        markFieldInvalid(config.descriptionInput, `Informe o motivo do ${config.singular}.`);
+        return null;
+    }
+
+    return { title, description };
+}
+
+function submitListItem(type) {
+    const draft = validateListItem(type);
+    if (!draft) return;
+
+    const items = getTemporaryItems(type);
+    const editingId = editingListItemIds[type];
+    if (editingId) {
+        setTemporaryItems(type, items.map(item => item.id === editingId ? { ...item, ...draft } : item));
+    } else {
+        setTemporaryItems(type, [...items, { id: makeId(), ...draft }]);
+    }
+
+    resetListEditor(type, { focus: true });
+    renderStructuredList(type);
+}
+
+function editListItem(type, itemId) {
+    const config = LIST_EDITOR_CONFIG[type];
+    const item = getTemporaryItems(type).find(entry => entry.id === itemId);
+    if (!item) return;
+
+    editingListItemIds[type] = item.id;
+    config.titleInput.value = item.title;
+    config.descriptionInput.value = item.description;
+    config.submitButton.textContent = "Salvar alteração";
+    config.cancelButton.hidden = false;
+    renderStructuredList(type);
+    config.titleInput.focus();
+}
+
+function removeListItem(type, itemId) {
+    setTemporaryItems(type, getTemporaryItems(type).filter(item => item.id !== itemId));
+    if (editingListItemIds[type] === itemId) resetListEditor(type);
+    renderStructuredList(type);
+}
+
+function hasPendingListDraft() {
+    return Object.entries(LIST_EDITOR_CONFIG).find(([, config]) =>
+        config.titleInput.value.trim() || config.descriptionInput.value.trim()
+    );
 }
 
 function parseFormNumber(input) {
@@ -303,19 +502,79 @@ function validateDetailedFields(data) {
             : "unknown",
         startTime,
         endTime,
-        availableDate: String(data.get("availableDate") || ""),
-        pros: String(data.get("pros") || "").trim(),
-        cons: String(data.get("cons") || "").trim()
+        availableDate: String(data.get("availableDate") || "")
     };
+}
+
+function updateVenueFormMode() {
+    const editingVenue = editingVenueId === null ? null : getVenueById(editingVenueId);
+    venueEditNotice.hidden = !editingVenue;
+    venueFormCard.classList.toggle("editing", Boolean(editingVenue));
+    cancelVenueEditButton.hidden = !editingVenue;
+    venueSubmitButton.textContent = editingVenue ? "Salvar alterações" : "Salvar";
+    document.querySelector("#venue-edit-name").textContent = editingVenue ? normalizeVenue(editingVenue).name : "";
 }
 
 function resetVenueForm() {
     venueForm.reset();
     venueForm.querySelectorAll("[aria-invalid='true']").forEach(clearFieldError);
     depositError.textContent = "";
+    temporaryPros = [];
+    temporaryCons = [];
+    editingVenueId = null;
+    resetListEditor("pros");
+    resetListEditor("cons");
+    renderStructuredList("pros");
+    renderStructuredList("cons");
     setRating(null);
     setDetailsExpanded(false);
     updateBudgetRemaining();
+    updateVenueFormMode();
+}
+
+function fillVenueForm(venue) {
+    const item = normalizeVenue(venue);
+    document.querySelector("#venue-name").value = item.name;
+    document.querySelector("#venue-type").value = item.type;
+    document.querySelector("#venue-address").value = item.address;
+    document.querySelector("#venue-description").value = item.description;
+    budgetInput.value = hasValue(item.budgetValue) ? item.budgetValue : "";
+    depositInput.value = hasValue(item.depositValue) ? item.depositValue : "";
+    document.querySelector("#venue-decoration").value = item.decorationOption;
+    document.querySelector("#venue-bridal-room").checked = item.hasBridalRoom;
+    document.querySelector("#venue-capacity").value = hasValue(item.capacity) ? item.capacity : "";
+    document.querySelector("#venue-parking").checked = item.hasParking;
+    document.querySelector("#venue-space-availability").value = item.spaceAvailability;
+    document.querySelector("#venue-start-time").value = item.startTime;
+    document.querySelector("#venue-end-time").value = item.endTime;
+    document.querySelector("#venue-available-date").value = item.availableDate;
+    temporaryPros = cloneStructuredList(item.pros);
+    temporaryCons = cloneStructuredList(item.cons);
+    resetListEditor("pros");
+    resetListEditor("cons");
+    renderStructuredList("pros");
+    renderStructuredList("cons");
+    setRating(item.rating);
+    updateBudgetRemaining();
+    setDetailsExpanded(hasDetailedInfo(item));
+}
+
+function startVenueEdit(id) {
+    const venue = getVenueById(id);
+    if (!venue) return;
+
+    editingVenueId = String(venue.id);
+    fillVenueForm(venue);
+    updateVenueFormMode();
+    venueFormCard.classList.remove("hidden");
+    if (venueDetailsDialog.open) venueDetailsDialog.close();
+    venueFormCard.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    document.querySelector("#venue-name").focus();
+}
+
+function cancelVenueEdit() {
+    resetVenueForm();
+    venueFormCard.classList.add("hidden");
 }
 
 function createDetailItem(label, value, full = false) {
@@ -342,6 +601,44 @@ function appendDetailSection(title, items) {
     list.className = "venue-detail-list";
     items.forEach(item => list.append(createDetailItem(item.label, item.value, item.full)));
     section.append(heading, list);
+    document.querySelector("#venue-details-content").append(section);
+}
+
+function createStructuredDetailGroup(title, items) {
+    const group = document.createElement("div");
+    const heading = document.createElement("h4");
+    const list = document.createElement("ul");
+
+    group.className = "venue-pros-cons-group";
+    heading.textContent = title;
+    items.forEach(item => {
+        const listItem = document.createElement("li");
+        const itemTitle = document.createElement("strong");
+        itemTitle.textContent = item.title;
+        listItem.append(itemTitle);
+        if (item.description) {
+            const description = document.createElement("p");
+            description.textContent = item.description;
+            listItem.append(description);
+        }
+        list.append(listItem);
+    });
+    group.append(heading, list);
+    return group;
+}
+
+function appendProsConsSection(pros, cons) {
+    if (!pros.length && !cons.length) return;
+
+    const section = document.createElement("section");
+    const heading = document.createElement("h3");
+    const content = document.createElement("div");
+    section.className = "venue-detail-section";
+    heading.textContent = "Prós e contras";
+    content.className = "venue-pros-cons";
+    if (pros.length) content.append(createStructuredDetailGroup("Prós", pros));
+    if (cons.length) content.append(createStructuredDetailGroup("Contras", cons));
+    section.append(heading, content);
     document.querySelector("#venue-details-content").append(section);
 }
 
@@ -384,13 +681,13 @@ function renderVenueDetails(venue) {
         ...(item.availableDate ? [{ label: "Data disponível", value: formatDate(item.availableDate, "") }] : [])
     ]);
 
-    appendDetailSection("Prós e contras", [
-        ...(item.pros.trim() ? [{ label: "Prós", value: item.pros, full: true }] : []),
-        ...(item.cons.trim() ? [{ label: "Contras", value: item.cons, full: true }] : [])
-    ]);
+    appendProsConsSection(item.pros, item.cons);
 
     const mapLink = document.querySelector("#venue-details-map-link");
     mapLink.href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(item.address)}`;
+
+    const editButton = document.querySelector("#venue-details-edit");
+    editButton.dataset.id = String(item.id);
 
     const favoriteButton = document.querySelector("#venue-details-favorite");
     favoriteButton.dataset.id = String(item.id);
@@ -403,6 +700,54 @@ function openVenueDetails(id) {
 
     renderVenueDetails(venue);
     if (!venueDetailsDialog.open) venueDetailsDialog.showModal();
+}
+
+function openVenueDeleteConfirmation(id, trigger) {
+    const venue = getVenueById(id);
+    if (!venue || deleteInProgress) return;
+
+    pendingDeleteVenueId = String(venue.id);
+    deleteTriggerElement = trigger;
+    document.querySelector("#venue-delete-name").textContent = `“${normalizeVenue(venue).name}”`;
+    confirmVenueDeleteButton.disabled = false;
+    if (!venueDeleteDialog.open) venueDeleteDialog.showModal();
+    document.querySelector("#cancel-venue-delete").focus();
+}
+
+function closeVenueDeleteConfirmation() {
+    if (venueDeleteDialog.open) venueDeleteDialog.close();
+}
+
+function confirmVenueDelete() {
+    if (!pendingDeleteVenueId || deleteInProgress) return;
+
+    deleteInProgress = true;
+    confirmVenueDeleteButton.disabled = true;
+    const id = pendingDeleteVenueId;
+    state.venues = state.venues.filter(item => String(item.id) !== id);
+
+    if (editingVenueId === id) {
+        resetVenueForm();
+        venueFormCard.classList.add("hidden");
+    }
+    if (venueDetailsDialog.open && document.querySelector("#venue-details-edit").dataset.id === id) {
+        venueDetailsDialog.close();
+    }
+
+    saveState();
+    renderAll();
+    closeVenueDeleteConfirmation();
+    deleteInProgress = false;
+    showToast("Local excluído com sucesso.");
+}
+
+function clearDeleteDialogState() {
+    const trigger = deleteTriggerElement;
+    pendingDeleteVenueId = null;
+    deleteTriggerElement = null;
+    deleteInProgress = false;
+    confirmVenueDeleteButton.disabled = false;
+    if (trigger?.isConnected !== false) trigger?.focus?.();
 }
 
 document.querySelectorAll("[data-toggle-form]").forEach(button => button.addEventListener("click", () => {
@@ -440,6 +785,23 @@ venueForm.addEventListener("input", event => {
     }
 });
 
+venueForm.addEventListener("click", event => {
+    const actionButton = event.target.closest("[data-list-action]");
+    if (!actionButton) return;
+
+    const { listAction, listType, itemId } = actionButton.dataset;
+    if (!LIST_EDITOR_CONFIG[listType]) return;
+    if (listAction === "submit") submitListItem(listType);
+    if (listAction === "edit") editListItem(listType, itemId);
+    if (listAction === "remove") removeListItem(listType, itemId);
+    if (listAction === "cancel") {
+        resetListEditor(listType, { focus: true });
+        renderStructuredList(listType);
+    }
+});
+
+cancelVenueEditButton.addEventListener("click", cancelVenueEdit);
+
 venueForm.addEventListener("submit", event => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -450,16 +812,55 @@ venueForm.addEventListener("submit", event => {
     const detailedFields = validateDetailedFields(data);
     if (!detailedFields) return;
 
+    const pendingDraft = hasPendingListDraft();
+    if (pendingDraft) {
+        const [type, config] = pendingDraft;
+        setDetailsExpanded(true);
+        markFieldInvalid(
+            config.titleInput,
+            `Adicione ou cancele o ${LIST_EDITOR_CONFIG[type].singular} que está sendo preenchido antes de salvar o local.`
+        );
+        return;
+    }
+
+    const structuredDetails = {
+        ...detailedFields,
+        pros: cloneStructuredList(temporaryPros),
+        cons: cloneStructuredList(temporaryCons)
+    };
+
+    if (editingVenueId !== null) {
+        const venueIndex = state.venues.findIndex(item => String(item.id) === String(editingVenueId));
+        if (venueIndex < 0) {
+            showToast("Não foi possível localizar o local para edição.");
+            return;
+        }
+
+        const currentVenue = state.venues[venueIndex];
+        state.venues[venueIndex] = {
+            ...currentVenue,
+            ...mainFields,
+            ...structuredDetails,
+            id: currentVenue.id
+        };
+        saveState();
+        renderAll();
+        resetVenueForm();
+        venueFormCard.classList.add("hidden");
+        showToast("Local atualizado com sucesso.");
+        return;
+    }
+
     state.venues.unshift({
         id: makeId(),
         ...mainFields,
         favorite: false,
-        ...detailedFields
+        ...structuredDetails
     });
     saveState();
     renderAll();
     resetVenueForm();
-    document.querySelector("#venue-form-card").classList.add("hidden");
+    venueFormCard.classList.add("hidden");
     showToast("Local adicionado.");
 });
 
@@ -472,12 +873,26 @@ document.body.addEventListener("click", event => {
         openVenueDetails(id);
         return;
     }
-
     if (action === "close-venue-details") {
         venueDetailsDialog.close();
         return;
     }
-
+    if (action === "edit-venue") {
+        startVenueEdit(id);
+        return;
+    }
+    if (action === "request-delete-venue") {
+        openVenueDeleteConfirmation(id, actionButton);
+        return;
+    }
+    if (action === "cancel-venue-delete") {
+        closeVenueDeleteConfirmation();
+        return;
+    }
+    if (action === "confirm-venue-delete") {
+        confirmVenueDelete();
+        return;
+    }
     if (action === "toggle-favorite") {
         const venue = getVenueById(id);
         if (!venue) return;
@@ -485,16 +900,6 @@ document.body.addEventListener("click", event => {
         saveState();
         renderAll();
         if (venueDetailsDialog.open) renderVenueDetails(venue);
-        return;
-    }
-
-    if (action === "delete-venue") {
-        state.venues = state.venues.filter(item => String(item.id) !== String(id));
-        if (venueDetailsDialog.open && document.querySelector("#venue-details-favorite").dataset.id === String(id)) {
-            venueDetailsDialog.close();
-        }
-        saveState();
-        renderAll();
     }
 });
 
@@ -502,6 +907,10 @@ venueDetailsDialog.addEventListener("click", event => {
     if (event.target === venueDetailsDialog) venueDetailsDialog.close();
 });
 
-setRating(null);
-setDetailsExpanded(false);
+venueDeleteDialog.addEventListener("click", event => {
+    if (event.target === venueDeleteDialog && !deleteInProgress) closeVenueDeleteConfirmation();
+});
+venueDeleteDialog.addEventListener("close", clearDeleteDialogState);
+
+resetVenueForm();
 renderAll();
