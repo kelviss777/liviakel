@@ -16,13 +16,35 @@ function loadState() {
         return saved ? {
             settings: { ...defaultState.settings },
             guests: Array.isArray(saved.guests) ? saved.guests : [],
-            venues: Array.isArray(saved.venues) ? saved.venues : [],
+            venues: [],
             tasks: Array.isArray(saved.tasks) ? saved.tasks : [],
             expenses: Array.isArray(saved.expenses) ? saved.expenses : []
         } : structuredClone(defaultState);
     } catch {
         return structuredClone(defaultState);
     }
+}
+
+function loadLegacyVenues() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+        return Array.isArray(saved?.venues) ? structuredClone(saved.venues) : [];
+    } catch {
+        return [];
+    }
+}
+
+function removeLegacyVenues() {
+    let saved = {};
+
+    try {
+        saved = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+    } catch {
+        saved = {};
+    }
+
+    delete saved.venues;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
 }
 
 function saveState() {
@@ -37,7 +59,6 @@ function saveState() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
         ...saved,
         guests: state.guests,
-        venues: state.venues,
         tasks: state.tasks,
         expenses: state.expenses
     }));

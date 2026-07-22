@@ -76,6 +76,9 @@ let editingListItemIds = { pros: null, cons: null };
 let pendingDeleteVenueId = null;
 let deleteTriggerElement = null;
 let deleteInProgress = false;
+let venuesLoading = true;
+let venueSaveInProgress = false;
+const favoriteVenueIds = new Set();
 
 function optionalNumber(value, { integer = false, maximum = Infinity } = {}) {
     if (value === null || value === undefined || value === "") return null;
@@ -202,13 +205,22 @@ function renderVenueHighlights(venue) {
 }
 
 function renderVenues() {
+    const venueList = document.querySelector("#venue-list");
+    venueList.setAttribute("aria-busy", String(venuesLoading));
+
+    if (venuesLoading) {
+        venueList.innerHTML = emptyState("Carregando locais...");
+        return;
+    }
+
     const venues = [...state.venues]
         .map(normalizeVenue)
         .sort((a, b) => Number(b.favorite) - Number(a.favorite) || a.name.localeCompare(b.name, "pt-BR"));
 
-    document.querySelector("#venue-list").innerHTML = venues.length ? venues.map(venue => {
+    venueList.innerHTML = venues.length ? venues.map(venue => {
         const id = escapeHtml(String(venue.id));
         const name = escapeHtml(venue.name);
+        const favoriteUpdating = favoriteVenueIds.has(String(venue.id));
         const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venue.address)}`;
         const detailsButton = hasDetailedInfo(venue)
             ? `<button class="venue-details-button" data-action="view-venue-details" data-id="${id}" type="button">Ver detalhes</button>`
@@ -218,7 +230,7 @@ function renderVenues() {
             <article class="venue-card ${venue.favorite ? "favorite" : ""}">
                 <div class="venue-card-top">
                     <span class="venue-type">${escapeHtml(venue.type)}</span>
-                    <button class="favorite-button ${venue.favorite ? "active" : ""}" data-action="toggle-favorite" data-id="${id}" type="button" aria-label="${venue.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}" title="${venue.favorite ? "Remover dos favoritos" : "Favoritar"}">★</button>
+                    <button class="favorite-button ${venue.favorite ? "active" : ""}" data-action="toggle-favorite" data-id="${id}" type="button" aria-label="${venue.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}" title="${venue.favorite ? "Remover dos favoritos" : "Favoritar"}" ${favoriteUpdating ? 'disabled aria-busy="true"' : ""}>★</button>
                 </div>
                 <h3>${name}</h3>
                 <a class="venue-address" href="${mapUrl}" target="_blank" rel="noopener noreferrer" title="Abrir no Google Maps">
@@ -511,7 +523,12 @@ function updateVenueFormMode() {
     venueEditNotice.hidden = !editingVenue;
     venueFormCard.classList.toggle("editing", Boolean(editingVenue));
     cancelVenueEditButton.hidden = !editingVenue;
-    venueSubmitButton.textContent = editingVenue ? "Salvar alterações" : "Salvar";
+    cancelVenueEditButton.disabled = venueSaveInProgress;
+    venueSubmitButton.disabled = venueSaveInProgress;
+    venueSubmitButton.textContent = venueSaveInProgress
+        ? (editingVenue ? "Atualizando..." : "Salvando...")
+        : (editingVenue ? "Salvar alterações" : "Salvar");
+    venueForm.setAttribute("aria-busy", String(venueSaveInProgress));
     document.querySelector("#venue-edit-name").textContent = editingVenue ? normalizeVenue(editingVenue).name : "";
 }
 
@@ -573,6 +590,7 @@ function startVenueEdit(id) {
 }
 
 function cancelVenueEdit() {
+    if (venueSaveInProgress) return;
     resetVenueForm();
     venueFormCard.classList.add("hidden");
 }
@@ -692,6 +710,8 @@ function renderVenueDetails(venue) {
     const favoriteButton = document.querySelector("#venue-details-favorite");
     favoriteButton.dataset.id = String(item.id);
     favoriteButton.textContent = item.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos";
+    favoriteButton.disabled = favoriteVenueIds.has(String(item.id));
+    favoriteButton.setAttribute("aria-busy", String(favoriteButton.disabled));
 }
 
 function openVenueDetails(id) {
@@ -718,27 +738,34 @@ function closeVenueDeleteConfirmation() {
     if (venueDeleteDialog.open) venueDeleteDialog.close();
 }
 
-function confirmVenueDelete() {
+async function confirmVenueDelete() {
     if (!pendingDeleteVenueId || deleteInProgress) return;
 
     deleteInProgress = true;
     confirmVenueDeleteButton.disabled = true;
     const id = pendingDeleteVenueId;
-    state.venues = state.venues.filter(item => String(item.id) !== id);
 
-    if (editingVenueId === id) {
-        resetVenueForm();
-        venueFormCard.classList.add("hidden");
-    }
-    if (venueDetailsDialog.open && document.querySelector("#venue-details-edit").dataset.id === id) {
-        venueDetailsDialog.close();
-    }
+    try {
+        await deleteCurrentWeddingVenue(id);
+        state.venues = state.venues.filter(item => String(item.id) !== id);
 
-    saveState();
-    renderAll();
-    closeVenueDeleteConfirmation();
-    deleteInProgress = false;
-    showToast("Local excluído com sucesso.");
+        if (editingVenueId === id) {
+            resetVenueForm();
+            venueFormCard.classList.add("hidden");
+        }
+        if (venueDetailsDialog.open && document.querySelector("#venue-details-edit").dataset.id === id) {
+            venueDetailsDialog.close();
+        }
+
+        renderAll();
+        closeVenueDeleteConfirmation();
+        showToast("Local excluído com sucesso.");
+    } catch (error) {
+        reportVenueOperationError("excluir o local", error);
+    } finally {
+        deleteInProgress = false;
+        confirmVenueDeleteButton.disabled = false;
+    }
 }
 
 function clearDeleteDialogState() {
@@ -748,6 +775,152 @@ function clearDeleteDialogState() {
     deleteInProgress = false;
     confirmVenueDeleteButton.disabled = false;
     if (trigger?.isConnected !== false) trigger?.focus?.();
+}
+
+function reportVenueOperationError(action, error) {
+    console.error(`[Locais] Não foi possível ${action}.`, error?.cause || error);
+
+    if (error?.code === "AUTH_REQUIRED" && typeof redirectToLogin === "function") {
+        redirectToLogin();
+        return;
+    }
+
+    showToast(error?.message || `Não foi possível ${action}. Tente novamente.`);
+}
+
+function refreshOpenVenueDetails() {
+    if (!venueDetailsDialog.open) return;
+    const openVenueId = document.querySelector("#venue-details-edit").dataset.id;
+    const openVenue = getVenueById(openVenueId);
+    if (openVenue) renderVenueDetails(openVenue);
+}
+
+async function toggleVenueFavorite(id) {
+    const venueIndex = state.venues.findIndex(item => String(item.id) === String(id));
+    if (venueIndex < 0 || favoriteVenueIds.has(String(id))) return;
+
+    const venue = state.venues[venueIndex];
+    const nextFavorite = !normalizeVenue(venue).favorite;
+    favoriteVenueIds.add(String(id));
+    renderAll();
+    refreshOpenVenueDetails();
+
+    try {
+        const updatedVenue = await updateCurrentWeddingVenueFavorite(venue.id, nextFavorite);
+        const currentIndex = state.venues.findIndex(item => String(item.id) === String(id));
+        if (currentIndex >= 0) state.venues[currentIndex] = normalizeVenue(updatedVenue);
+    } catch (error) {
+        reportVenueOperationError("atualizar o favorito", error);
+    } finally {
+        favoriteVenueIds.delete(String(id));
+        renderAll();
+        refreshOpenVenueDetails();
+    }
+}
+
+function venueMigrationKeyPart(value) {
+    return String(value ?? "").trim().toLocaleLowerCase("pt-BR");
+}
+
+function getVenueMigrationIdentity(venue) {
+    const item = normalizeVenue(venue);
+    return [item.name, item.type, item.address].map(venueMigrationKeyPart).join("\u0000");
+}
+
+function createVenueMigrationError(message, cause = null) {
+    const error = new Error(message);
+    error.code = "VENUE_MIGRATION_FAILED";
+    if (cause) error.cause = cause;
+    return error;
+}
+
+async function migrateLegacyVenues(weddingId, remoteVenues) {
+    const markerKey = `nosso-casamento-venues-migrated:${weddingId}`;
+    const backupKey = `nosso-casamento-venues-backup:${weddingId}`;
+    if (localStorage.getItem(markerKey)) {
+        return { venues: remoteVenues, importedCount: 0 };
+    }
+
+    const legacyVenues = loadLegacyVenues();
+    if (!legacyVenues.length) {
+        localStorage.setItem(markerKey, JSON.stringify({
+            completedAt: new Date().toISOString(),
+            importedCount: 0
+        }));
+        return { venues: remoteVenues, importedCount: 0 };
+    }
+
+    if (localStorage.getItem(backupKey) === null) {
+        try {
+            localStorage.setItem(backupKey, JSON.stringify(legacyVenues));
+        } catch (error) {
+            throw createVenueMigrationError(
+                "Não foi possível criar a cópia de segurança dos locais antigos. Nenhum dado foi migrado.",
+                error
+            );
+        }
+    }
+
+    const knownVenues = new Set(remoteVenues.map(getVenueMigrationIdentity));
+    let importedCount = 0;
+
+    for (const legacyVenue of legacyVenues) {
+        const normalizedVenue = normalizeVenue(legacyVenue);
+        if (!normalizedVenue.name.trim() || !normalizedVenue.type.trim() || !normalizedVenue.address.trim()) {
+            throw createVenueMigrationError(
+                "Um local antigo não possui nome, tipo ou endereço. A migração foi interrompida sem apagar os dados locais."
+            );
+        }
+
+        const identity = getVenueMigrationIdentity(normalizedVenue);
+        if (knownVenues.has(identity)) continue;
+
+        try {
+            const createdVenue = normalizeVenue(await createCurrentWeddingVenue(normalizedVenue));
+            remoteVenues.push(createdVenue);
+            knownVenues.add(identity);
+            importedCount += 1;
+        } catch (error) {
+            throw createVenueMigrationError(
+                "Não foi possível migrar todos os locais antigos. A cópia local foi preservada para uma nova tentativa.",
+                error
+            );
+        }
+    }
+
+    removeLegacyVenues();
+    localStorage.setItem(markerKey, JSON.stringify({
+        completedAt: new Date().toISOString(),
+        importedCount
+    }));
+    return { venues: remoteVenues, importedCount };
+}
+
+async function initializeVenues() {
+    venuesLoading = true;
+    renderAll();
+    let remoteLoaded = false;
+
+    try {
+        const { weddingId, venues } = await listCurrentWeddingVenues();
+        state.venues = venues.map(normalizeVenue);
+        remoteLoaded = true;
+
+        const migration = await migrateLegacyVenues(weddingId, state.venues);
+        state.venues = migration.venues;
+        if (migration.importedCount > 0) {
+            showToast(`${migration.importedCount} ${migration.importedCount === 1 ? "local antigo foi migrado" : "locais antigos foram migrados"} com sucesso.`);
+        }
+    } catch (error) {
+        if (!remoteLoaded) state.venues = [];
+        reportVenueOperationError(
+            error?.code === "VENUE_MIGRATION_FAILED" ? "concluir a migração dos locais" : "carregar os locais",
+            error
+        );
+    } finally {
+        venuesLoading = false;
+        renderAll();
+    }
 }
 
 document.querySelectorAll("[data-toggle-form]").forEach(button => button.addEventListener("click", () => {
@@ -802,8 +975,10 @@ venueForm.addEventListener("click", event => {
 
 cancelVenueEditButton.addEventListener("click", cancelVenueEdit);
 
-venueForm.addEventListener("submit", event => {
+venueForm.addEventListener("submit", async event => {
     event.preventDefault();
+    if (venueSaveInProgress) return;
+
     const data = new FormData(event.currentTarget);
     const mainFields = validateMainFields(data);
     if (!mainFields) return;
@@ -829,42 +1004,64 @@ venueForm.addEventListener("submit", event => {
         cons: cloneStructuredList(temporaryCons)
     };
 
+    venueSaveInProgress = true;
+    updateVenueFormMode();
+
     if (editingVenueId !== null) {
         const venueIndex = state.venues.findIndex(item => String(item.id) === String(editingVenueId));
         if (venueIndex < 0) {
             showToast("Não foi possível localizar o local para edição.");
+            venueSaveInProgress = false;
+            updateVenueFormMode();
             return;
         }
 
         const currentVenue = state.venues[venueIndex];
-        state.venues[venueIndex] = {
+        const venueDraft = {
             ...currentVenue,
             ...mainFields,
             ...structuredDetails,
             id: currentVenue.id
         };
-        saveState();
-        renderAll();
-        resetVenueForm();
-        venueFormCard.classList.add("hidden");
-        showToast("Local atualizado com sucesso.");
+
+        try {
+            const updatedVenue = await updateCurrentWeddingVenue(currentVenue.id, venueDraft);
+            state.venues[venueIndex] = normalizeVenue(updatedVenue);
+            renderAll();
+            resetVenueForm();
+            venueFormCard.classList.add("hidden");
+            showToast("Local atualizado com sucesso.");
+        } catch (error) {
+            reportVenueOperationError("atualizar o local", error);
+        } finally {
+            venueSaveInProgress = false;
+            updateVenueFormMode();
+        }
         return;
     }
 
-    state.venues.unshift({
-        id: makeId(),
+    const venueDraft = {
         ...mainFields,
         favorite: false,
         ...structuredDetails
-    });
-    saveState();
-    renderAll();
-    resetVenueForm();
-    venueFormCard.classList.add("hidden");
-    showToast("Local adicionado.");
+    };
+
+    try {
+        const createdVenue = await createCurrentWeddingVenue(venueDraft);
+        state.venues.unshift(normalizeVenue(createdVenue));
+        renderAll();
+        resetVenueForm();
+        venueFormCard.classList.add("hidden");
+        showToast("Local adicionado.");
+    } catch (error) {
+        reportVenueOperationError("adicionar o local", error);
+    } finally {
+        venueSaveInProgress = false;
+        updateVenueFormMode();
+    }
 });
 
-document.body.addEventListener("click", event => {
+document.body.addEventListener("click", async event => {
     const actionButton = event.target.closest("[data-action]");
     if (!actionButton) return;
     const { action, id } = actionButton.dataset;
@@ -890,16 +1087,11 @@ document.body.addEventListener("click", event => {
         return;
     }
     if (action === "confirm-venue-delete") {
-        confirmVenueDelete();
+        await confirmVenueDelete();
         return;
     }
     if (action === "toggle-favorite") {
-        const venue = getVenueById(id);
-        if (!venue) return;
-        venue.favorite = !venue.favorite;
-        saveState();
-        renderAll();
-        if (venueDetailsDialog.open) renderVenueDetails(venue);
+        await toggleVenueFavorite(id);
     }
 });
 
@@ -913,4 +1105,4 @@ venueDeleteDialog.addEventListener("click", event => {
 venueDeleteDialog.addEventListener("close", clearDeleteDialogState);
 
 resetVenueForm();
-renderAll();
+const venuesInitializationPromise = initializeVenues();

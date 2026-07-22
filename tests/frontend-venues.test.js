@@ -124,6 +124,7 @@ class FakeElement {
 
     reset() {
         this.resetCalled = true;
+        this.resetCount = (this.resetCount || 0) + 1;
         this._onReset?.();
     }
 
@@ -138,7 +139,7 @@ function allText(element) {
         .join(" ");
 }
 
-function createHarness(initialVenues = []) {
+function createHarness(initialVenues = [], options = {}) {
     const elements = new Map();
     const create = (selector, options) => {
         const element = new FakeElement(options);
@@ -250,9 +251,28 @@ function createHarness(initialVenues = []) {
     let formValues = new Map();
     let savedCount = 0;
     let idCounter = 0;
+    let removedLegacyCount = 0;
+    let legacyVenues = structuredClone(options.legacyVenues || []);
     const toastMessages = [];
-    const context = vm.createContext({
-        console,
+    const consoleErrors = [];
+    const remoteCalls = { create: [], update: [], favorite: [], delete: [], list: 0 };
+    const storage = new Map(Object.entries(options.storage || {}));
+    const localStorage = {
+        getItem(key) {
+            return storage.has(key) ? storage.get(key) : null;
+        },
+        setItem(key, value) {
+            storage.set(key, String(value));
+        }
+    };
+    let context;
+    context = vm.createContext({
+        console: {
+            ...console,
+            error(...args) {
+                consoleErrors.push(args);
+            }
+        },
         document,
         Intl,
         Number,
@@ -260,6 +280,8 @@ function createHarness(initialVenues = []) {
         String,
         Boolean,
         Math,
+        Date,
+        localStorage,
         state: { venues: structuredClone(initialVenues) },
         FormData: class {
             get(name) {
@@ -289,12 +311,67 @@ function createHarness(initialVenues = []) {
         saveState() {
             savedCount += 1;
         },
+        loadLegacyVenues() {
+            return structuredClone(legacyVenues);
+        },
+        removeLegacyVenues() {
+            legacyVenues = [];
+            removedLegacyCount += 1;
+        },
+        listCurrentWeddingVenues() {
+            remoteCalls.list += 1;
+            if (options.listCurrentWeddingVenues) {
+                return options.listCurrentWeddingVenues();
+            }
+            return new Promise(() => {});
+        },
+        async createCurrentWeddingVenue(venue) {
+            remoteCalls.create.push(structuredClone(venue));
+            if (options.createError) throw options.createError;
+            if (options.createCurrentWeddingVenue) {
+                return options.createCurrentWeddingVenue(venue, remoteCalls.create.length);
+            }
+            return {
+                ...structuredClone(venue),
+                id: options.createdId || `00000000-0000-4000-8000-${String(remoteCalls.create.length).padStart(12, "0")}`
+            };
+        },
+        async updateCurrentWeddingVenue(id, venue) {
+            remoteCalls.update.push({ id, venue: structuredClone(venue) });
+            if (options.updateError) throw options.updateError;
+            if (options.updateCurrentWeddingVenue) {
+                return options.updateCurrentWeddingVenue(id, venue);
+            }
+            return { ...structuredClone(venue), id };
+        },
+        async updateCurrentWeddingVenueFavorite(id, favorite) {
+            remoteCalls.favorite.push({ id, favorite });
+            if (options.favoriteError) throw options.favoriteError;
+            if (options.updateCurrentWeddingVenueFavorite) {
+                return options.updateCurrentWeddingVenueFavorite(id, favorite);
+            }
+            const current = context.state.venues.find(item => String(item.id) === String(id));
+            return { ...structuredClone(current), favorite };
+        },
+        async deleteCurrentWeddingVenue(id) {
+            remoteCalls.delete.push(id);
+            if (options.deleteError) throw options.deleteError;
+            if (options.deleteCurrentWeddingVenue) {
+                return options.deleteCurrentWeddingVenue(id);
+            }
+            return { id };
+        },
         showToast(message) {
             toastMessages.push(message);
         }
     });
 
     vm.runInContext(venueSource, context);
+    const initializationPromise = vm.runInContext("venuesInitializationPromise", context);
+    if (!options.autoInitialize) {
+        context.state.venues = structuredClone(initialVenues);
+        vm.runInContext("venuesLoading = false; renderAll()", context);
+    }
 
     return {
         context,
@@ -330,11 +407,18 @@ function createHarness(initialVenues = []) {
         cancelDelete,
         body,
         toastMessages,
+        consoleErrors,
+        remoteCalls,
+        storage,
+        initializationPromise,
         setFormValues(values) {
             formValues = new Map(Object.entries(values));
         },
         getSavedCount() {
             return savedCount;
+        },
+        getRemovedLegacyCount() {
+            return removedLegacyCount;
         }
     };
 }
@@ -355,7 +439,7 @@ function baseFormValues(overrides = {}) {
 }
 
 function submitVenue(harness) {
-    harness.form.listeners.submit[0]({
+    return harness.form.listeners.submit[0]({
         preventDefault() {},
         currentTarget: harness.form
     });
@@ -433,7 +517,7 @@ test("edita e remove somente o pró ou contra selecionado", () => {
     assert.equal(harness.elements.get("#submit-pro-item").textContent, "Adicionar pró");
 });
 
-test("valida tópico e motivo antes de adicionar itens", () => {
+test("valida tópico e motivo antes de adicionar itens", async () => {
     const harness = createHarness();
 
     harness.proDescription.value = "Descrição sem tópico";
@@ -450,7 +534,7 @@ test("valida tópico e motivo antes de adicionar itens", () => {
     harness.proTitle.value = "Rascunho não adicionado";
     harness.proDescription.value = "Não deve ser perdido silenciosamente";
     harness.setFormValues(baseFormValues());
-    submitVenue(harness);
+    await submitVenue(harness);
     assert.equal(readValue(harness, "state.venues").length, 0);
     assert.match(harness.toastMessages.at(-1), /Adicione ou cancele/);
 });
@@ -481,10 +565,10 @@ test("converte textos antigos de prós e contras sem apagar o conteúdo", () => 
     assert.match(harness.venueList.innerHTML, /Ver detalhes/);
 });
 
-test("cadastra local básico e local com listas estruturadas", () => {
+test("cadastra local básico e local com listas estruturadas", async () => {
     const basicHarness = createHarness();
     basicHarness.setFormValues(baseFormValues());
-    submitVenue(basicHarness);
+    await submitVenue(basicHarness);
     const basic = readValue(basicHarness, "state.venues[0]");
     assert.deepEqual(basic.pros, []);
     assert.deepEqual(basic.cons, []);
@@ -498,7 +582,7 @@ test("cadastra local básico e local com listas estruturadas", () => {
     detailedHarness.conDescription.value = "São limitadas";
     vm.runInContext("submitListItem('cons')", detailedHarness.context);
     detailedHarness.setFormValues(baseFormValues({ description: "Salão amplo" }));
-    submitVenue(detailedHarness);
+    await submitVenue(detailedHarness);
 
     const detailed = readValue(detailedHarness, "state.venues[0]");
     assert.equal(detailed.pros[0].title, "Localização");
@@ -527,7 +611,7 @@ test("modal exibe tópicos e motivos estruturados com segurança", () => {
     assert.equal(harness.modalEdit.dataset.id, "details");
 });
 
-test("edita local completo sem duplicar e preserva id e data de criação", () => {
+test("edita local completo sem duplicar e preserva id e data de criação", async () => {
     const harness = createHarness([{
         id: "venue-1",
         createdAt: "2026-07-01T10:00:00Z",
@@ -578,7 +662,7 @@ test("edita local completo sem duplicar e preserva id e data de criação", () =
         endTime: "03:00",
         availableDate: "2027-06-12"
     }));
-    submitVenue(harness);
+    await submitVenue(harness);
 
     const venues = readValue(harness, "state.venues");
     assert.equal(venues.length, 1);
@@ -592,7 +676,7 @@ test("edita local completo sem duplicar e preserva id e data de criação", () =
     assert.equal(vm.runInContext("editingVenueId", harness.context), null);
 });
 
-test("edita local básico e abre detalhes apenas quando necessário", () => {
+test("edita local básico e abre detalhes apenas quando necessário", async () => {
     const harness = createHarness([{
         id: "basic",
         name: "Igreja antiga",
@@ -608,7 +692,7 @@ test("edita local básico e abre detalhes apenas quando necessário", () => {
         type: "Igreja",
         address: "Praça nova"
     }));
-    submitVenue(harness);
+    await submitVenue(harness);
     assert.equal(readValue(harness, "state.venues").length, 1);
     assert.equal(readValue(harness, "state.venues[0]").name, "Igreja atualizada");
 });
@@ -635,7 +719,7 @@ test("cancelar edição limpa o formulário e não altera o registro", () => {
     assert.equal(harness.submitButton.textContent, "Salvar");
 });
 
-test("exclusão personalizada cancela e confirma sem cliques duplicados", () => {
+test("exclusão personalizada cancela e confirma sem cliques duplicados", async () => {
     const harness = createHarness([
         { id: "one", name: "Villa Um", type: "Buffet", address: "Rua 1" },
         { id: "two", name: "Villa Dois", type: "Igreja", address: "Rua 2" }
@@ -658,14 +742,17 @@ test("exclusão personalizada cancela e confirma sem cliques duplicados", () => 
     assert.equal(vm.runInContext("pendingDeleteVenueId", harness.context), null);
     assert.equal(trigger.focused, true);
 
-    vm.runInContext("openVenueDeleteConfirmation('one', trigger); confirmVenueDelete(); confirmVenueDelete()", harness.context);
+    const deletionPromise = vm.runInContext("openVenueDeleteConfirmation('one', trigger); confirmVenueDelete()", harness.context);
+    await vm.runInContext("confirmVenueDelete()", harness.context);
+    await deletionPromise;
     const venues = readValue(harness, "state.venues");
     assert.deepEqual(venues.map(item => item.id), ["two"]);
-    assert.equal(harness.getSavedCount(), 1);
+    assert.deepEqual(harness.remoteCalls.delete, ["one"]);
+    assert.equal(harness.getSavedCount(), 0);
     assert.match(harness.toastMessages.at(-1), /excluído com sucesso/);
 });
 
-test("favorito e Google Maps continuam funcionando", () => {
+test("favorito e Google Maps continuam funcionando", async () => {
     const harness = createHarness([{
         id: "favorite",
         name: "Zênite",
@@ -676,7 +763,7 @@ test("favorito e Google Maps continuam funcionando", () => {
     assert.match(harness.venueList.innerHTML, /google\.com\/maps\/search/);
 
     const clickHandler = harness.body.listeners.click[0];
-    clickHandler({
+    await clickHandler({
         target: {
             closest() {
                 return { dataset: { action: "toggle-favorite", id: "favorite" } };
@@ -712,6 +799,245 @@ test("mantém validações financeiras, capacidade e horários", () => {
     );
 });
 
+test("carrega locais remotos, incluindo estado vazio, sem usar o estado local", async () => {
+    const remoteVenue = {
+        id: "remote-1",
+        name: "Local remoto",
+        type: "Buffet",
+        address: "Rua remota",
+        favorite: false,
+        pros: [],
+        cons: []
+    };
+    const harness = createHarness([{ id: "local-ignorado", name: "Local antigo" }], {
+        autoInitialize: true,
+        listCurrentWeddingVenues: async () => ({
+            weddingId: "wedding-1",
+            venues: [remoteVenue]
+        })
+    });
+
+    assert.match(harness.venueList.innerHTML, /Carregando locais/);
+    await harness.initializationPromise;
+    assert.deepEqual(readValue(harness, "state.venues.map(item => item.id)"), ["remote-1"]);
+    assert.match(harness.venueList.innerHTML, /Local remoto/);
+    assert.equal(harness.consoleErrors.length, 0);
+
+    const emptyHarness = createHarness([], {
+        autoInitialize: true,
+        listCurrentWeddingVenues: async () => ({ weddingId: "wedding-empty", venues: [] })
+    });
+    await emptyHarness.initializationPromise;
+    assert.deepEqual(readValue(emptyHarness, "state.venues"), []);
+    assert.match(emptyHarness.venueList.innerHTML, /Adicione o primeiro local/);
+    assert.ok(emptyHarness.storage.has("nosso-casamento-venues-migrated:wedding-empty"));
+});
+
+test("mantém formulário e estado intactos quando o INSERT falha", async () => {
+    const error = Object.assign(new Error("Não foi possível adicionar o local."), {
+        code: "VENUE_CREATE_FAILED"
+    });
+    const harness = createHarness([], { createError: error });
+    const resetCountBeforeSubmit = harness.form.resetCount;
+    harness.setFormValues(baseFormValues());
+
+    await submitVenue(harness);
+
+    assert.deepEqual(readValue(harness, "state.venues"), []);
+    assert.equal(harness.form.resetCount, resetCountBeforeSubmit);
+    assert.equal(harness.formCard.classList.contains("hidden"), false);
+    assert.equal(harness.submitButton.disabled, false);
+    assert.equal(harness.remoteCalls.create.length, 1);
+    assert.match(harness.toastMessages.at(-1), /Não foi possível adicionar/);
+    assert.equal(harness.consoleErrors.length, 1);
+});
+
+test("bloqueia INSERT duplicado e usa somente o UUID remoto", async () => {
+    let releaseInsert;
+    const pendingInsert = new Promise(resolve => {
+        releaseInsert = resolve;
+    });
+    const harness = createHarness([], {
+        createCurrentWeddingVenue: async venue => {
+            await pendingInsert;
+            return {
+                ...venue,
+                id: "22222222-2222-4222-8222-222222222222"
+            };
+        }
+    });
+    harness.setFormValues(baseFormValues());
+
+    const firstSubmit = submitVenue(harness);
+    const secondSubmit = submitVenue(harness);
+    assert.equal(harness.remoteCalls.create.length, 1);
+    assert.equal(harness.submitButton.disabled, true);
+
+    releaseInsert();
+    await Promise.all([firstSubmit, secondSubmit]);
+    assert.equal(readValue(harness, "state.venues[0].id"), "22222222-2222-4222-8222-222222222222");
+    assert.equal(harness.remoteCalls.create.length, 1);
+    assert.equal(harness.submitButton.disabled, false);
+    assert.doesNotMatch(venueSource, /id:\s*makeId\(\),\s*\.\.\.mainFields/);
+});
+
+test("preserva edição e estado quando o UPDATE falha", async () => {
+    const original = {
+        id: "venue-update-error",
+        name: "Original",
+        type: "Buffet",
+        address: "Rua original",
+        favorite: true
+    };
+    const harness = createHarness([original], {
+        updateError: Object.assign(new Error("Não foi possível atualizar o local."), {
+            code: "VENUE_UPDATE_FAILED"
+        })
+    });
+    vm.runInContext("startVenueEdit('venue-update-error')", harness.context);
+    harness.setFormValues(baseFormValues({ name: "Alterado", type: "Buffet" }));
+
+    await submitVenue(harness);
+
+    assert.deepEqual(readValue(harness, "state.venues[0]"), original);
+    assert.equal(vm.runInContext("editingVenueId", harness.context), "venue-update-error");
+    assert.equal(harness.formCard.classList.contains("hidden"), false);
+    assert.equal(harness.submitButton.disabled, false);
+    assert.equal(harness.remoteCalls.update.length, 1);
+});
+
+test("não antecipa favorito quando a atualização remota falha", async () => {
+    const harness = createHarness([{
+        id: "favorite-error",
+        name: "Local",
+        type: "Igreja",
+        address: "Rua",
+        favorite: false
+    }], {
+        favoriteError: Object.assign(new Error("Sem permissão para favoritar."), {
+            code: "VENUE_PERMISSION_DENIED"
+        })
+    });
+
+    await vm.runInContext("toggleVenueFavorite('favorite-error')", harness.context);
+
+    assert.equal(vm.runInContext("state.venues[0].favorite", harness.context), false);
+    assert.deepEqual(harness.remoteCalls.favorite, [{ id: "favorite-error", favorite: true }]);
+    assert.match(harness.toastMessages.at(-1), /Sem permissão/);
+    assert.equal(vm.runInContext("favoriteVenueIds.size", harness.context), 0);
+});
+
+test("mantém confirmação e cartão quando o DELETE falha", async () => {
+    const harness = createHarness([{
+        id: "delete-error",
+        name: "Local",
+        type: "Buffet",
+        address: "Rua"
+    }], {
+        deleteError: Object.assign(new Error("Não foi possível excluir o local."), {
+            code: "VENUE_DELETE_FAILED"
+        })
+    });
+    const trigger = new FakeElement();
+    harness.context.trigger = trigger;
+    const deletion = vm.runInContext(
+        "openVenueDeleteConfirmation('delete-error', trigger); confirmVenueDelete()",
+        harness.context
+    );
+    await deletion;
+
+    assert.equal(harness.deleteDialog.open, true);
+    assert.equal(harness.confirmDelete.disabled, false);
+    assert.deepEqual(readValue(harness, "state.venues.map(item => item.id)"), ["delete-error"]);
+    assert.deepEqual(harness.remoteCalls.delete, ["delete-error"]);
+});
+
+test("migra localStorage uma vez, sem duplicar equivalentes e preservando backup", async () => {
+    const legacyVenues = [
+        {
+            id: "local-1",
+            name: "  VILLA JARDIM ",
+            type: "Buffet",
+            address: " Rua Um ",
+            pros: "Boa equipe"
+        },
+        {
+            id: "local-2",
+            name: "Igreja Central",
+            type: "Igreja",
+            address: "Praça Central",
+            startTime: "19:00",
+            pros: [{ id: "p1", title: "Acesso", description: "Fácil" }],
+            cons: []
+        }
+    ];
+    const harness = createHarness([], {
+        autoInitialize: true,
+        legacyVenues,
+        listCurrentWeddingVenues: async () => ({
+            weddingId: "wedding-migration",
+            venues: [{
+                id: "remote-existing",
+                name: "villa jardim",
+                type: "buffet",
+                address: "rua um",
+                pros: [],
+                cons: []
+            }]
+        })
+    });
+
+    await harness.initializationPromise;
+
+    assert.equal(harness.remoteCalls.create.length, 1);
+    assert.equal(harness.remoteCalls.create[0].name, "Igreja Central");
+    assert.equal(harness.remoteCalls.create[0].startTime, "19:00");
+    assert.deepEqual(harness.remoteCalls.create[0].pros, [
+        { id: "p1", title: "Acesso", description: "Fácil" }
+    ]);
+    assert.equal(harness.getRemovedLegacyCount(), 1);
+    assert.deepEqual(
+        JSON.parse(harness.storage.get("nosso-casamento-venues-backup:wedding-migration")),
+        legacyVenues
+    );
+    assert.ok(harness.storage.has("nosso-casamento-venues-migrated:wedding-migration"));
+    assert.equal(readValue(harness, "state.venues.length"), 2);
+
+    const refreshedHarness = createHarness([], {
+        autoInitialize: true,
+        legacyVenues,
+        storage: Object.fromEntries(harness.storage),
+        listCurrentWeddingVenues: async () => ({
+            weddingId: "wedding-migration",
+            venues: readValue(harness, "state.venues")
+        })
+    });
+    await refreshedHarness.initializationPromise;
+    assert.equal(refreshedHarness.remoteCalls.create.length, 0);
+    assert.equal(refreshedHarness.getRemovedLegacyCount(), 0);
+    assert.deepEqual(
+        refreshedHarness.storage.get("nosso-casamento-venues-backup:wedding-migration"),
+        harness.storage.get("nosso-casamento-venues-backup:wedding-migration")
+    );
+});
+
+test("falha parcial de migração não cria marca nem remove dados locais", async () => {
+    const harness = createHarness([], {
+        autoInitialize: true,
+        legacyVenues: [{ id: "old", name: "Local", type: "Buffet", address: "Rua" }],
+        listCurrentWeddingVenues: async () => ({ weddingId: "wedding-failure", venues: [] }),
+        createError: Object.assign(new Error("RLS bloqueou"), { code: "VENUE_PERMISSION_DENIED" })
+    });
+
+    await harness.initializationPromise;
+
+    assert.equal(harness.getRemovedLegacyCount(), 0);
+    assert.equal(harness.storage.has("nosso-casamento-venues-migrated:wedding-failure"), false);
+    assert.ok(harness.storage.has("nosso-casamento-venues-backup:wedding-failure"));
+    assert.equal(harness.remoteCalls.create.length, 1);
+    assert.equal(harness.consoleErrors.length, 1);
+});
+
 test("HTML e CSS mantêm acessibilidade, modais e responsividade", () => {
     assert.match(venueHtml, /aria-expanded="false"/);
     assert.match(venueHtml, /role="radiogroup"/);
@@ -725,4 +1051,5 @@ test("HTML e CSS mantêm acessibilidade, modais e responsividade", () => {
     assert.match(venueCss, /@media \(max-width: 620px\)/);
     assert.match(venueCss, /\.pros-cons-editors, \.venue-pros-cons \{ grid-template-columns: 1fr; \}/);
     assert.match(venueCss, /\.venue-dialog-content \{[^}]*overflow-y: auto/);
+    assert.doesNotMatch(venueSource, /saveState\s*\(/);
 });

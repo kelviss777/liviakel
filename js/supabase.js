@@ -51,10 +51,31 @@ async function getSupabaseClient() {
     return supabaseClient;
 }
 
-function createSupabaseAppError(message, code) {
+function createSupabaseAppError(message, code, cause = null) {
     const error = new Error(message);
     error.code = code;
+    if (cause) error.cause = cause;
     return error;
+}
+
+function isSupabasePermissionError(error) {
+    const message = String(error?.message || "").toLowerCase();
+    return error?.code === "42501" ||
+        message.includes("row-level security") ||
+        message.includes("permission denied") ||
+        message.includes("not authorized");
+}
+
+function createVenueSupabaseError(error, fallbackMessage, code) {
+    if (isSupabasePermissionError(error)) {
+        return createSupabaseAppError(
+            "Sua conta não tem permissão para realizar esta operação nos locais do casamento.",
+            "VENUE_PERMISSION_DENIED",
+            error
+        );
+    }
+
+    return createSupabaseAppError(fallbackMessage, code, error);
 }
 
 async function getAuthenticatedUser() {
@@ -190,6 +211,230 @@ async function updateCurrentWedding({ partnerOne, partnerTwo, weddingDate }) {
     }
 
     return mapWeddingRecord(data);
+}
+
+function normalizeVenueDatabaseNumber(value, { integer = false } = {}) {
+    if (value === null || value === undefined || value === "") return null;
+    const number = Number(value);
+    if (!Number.isFinite(number) || (integer && !Number.isInteger(number))) return null;
+    return number;
+}
+
+function normalizeVenueDatabaseTime(value) {
+    const time = String(value ?? "").trim();
+    const match = time.match(/^(\d{2}:\d{2})/);
+    return match ? match[1] : "";
+}
+
+function normalizeVenueJsonList(value) {
+    if (!Array.isArray(value)) return [];
+
+    return value.map(item => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+        const id = String(item.id ?? "").trim();
+        const title = String(item.title ?? "").trim();
+        const description = String(item.description ?? "").trim();
+        if (!id && !title && !description) return null;
+        return { id, title, description };
+    }).filter(Boolean);
+}
+
+function mapVenueDatabaseRecord(record = {}) {
+    const venue = {
+        id: String(record.id ?? ""),
+        name: String(record.name ?? ""),
+        type: String(record.type ?? ""),
+        address: String(record.address ?? ""),
+        favorite: record.favorite === true,
+        description: String(record.description ?? ""),
+        rating: normalizeVenueDatabaseNumber(record.rating, { integer: true }),
+        budgetValue: normalizeVenueDatabaseNumber(record.budget_value),
+        depositValue: normalizeVenueDatabaseNumber(record.deposit_value),
+        decorationOption: String(record.decoration_option ?? "unknown"),
+        hasBridalRoom: record.has_bridal_room === true,
+        capacity: normalizeVenueDatabaseNumber(record.capacity, { integer: true }),
+        hasParking: record.has_parking === true,
+        spaceAvailability: String(record.space_availability ?? "unknown"),
+        startTime: normalizeVenueDatabaseTime(record.start_time),
+        endTime: normalizeVenueDatabaseTime(record.end_time),
+        availableDate: String(record.available_date ?? ""),
+        pros: normalizeVenueJsonList(record.pros),
+        cons: normalizeVenueJsonList(record.cons)
+    };
+
+    if (Object.hasOwn(record, "created_at")) venue.createdAt = record.created_at;
+    if (Object.hasOwn(record, "updated_at")) venue.updatedAt = record.updated_at;
+    return venue;
+}
+
+function venueNumberForDatabase(value, { integer = false } = {}) {
+    if (value === null || value === undefined || value === "") return null;
+    const number = Number(value);
+    if (!Number.isFinite(number) || (integer && !Number.isInteger(number))) return null;
+    return number;
+}
+
+function mapVenueToDatabasePayload(venue = {}) {
+    return {
+        name: String(venue.name ?? "").trim(),
+        type: String(venue.type ?? "").trim(),
+        address: String(venue.address ?? "").trim(),
+        favorite: venue.favorite === true,
+        description: String(venue.description ?? "").trim(),
+        rating: venueNumberForDatabase(venue.rating, { integer: true }),
+        budget_value: venueNumberForDatabase(venue.budgetValue),
+        deposit_value: venueNumberForDatabase(venue.depositValue),
+        decoration_option: String(venue.decorationOption ?? "unknown"),
+        has_bridal_room: venue.hasBridalRoom === true,
+        capacity: venueNumberForDatabase(venue.capacity, { integer: true }),
+        has_parking: venue.hasParking === true,
+        space_availability: String(venue.spaceAvailability ?? "unknown"),
+        start_time: String(venue.startTime ?? "").trim() || null,
+        end_time: String(venue.endTime ?? "").trim() || null,
+        available_date: String(venue.availableDate ?? "").trim() || null,
+        pros: normalizeVenueJsonList(venue.pros),
+        cons: normalizeVenueJsonList(venue.cons)
+    };
+}
+
+async function listCurrentWeddingVenues() {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    const { data, error } = await client
+        .from("venues")
+        .select("*")
+        .eq("wedding_id", weddingId)
+        .order("favorite", { ascending: false })
+        .order("name", { ascending: true });
+
+    if (error) {
+        throw createVenueSupabaseError(
+            error,
+            "Não foi possível carregar os locais. Verifique sua conexão e tente novamente.",
+            "VENUE_LIST_FAILED"
+        );
+    }
+
+    return {
+        weddingId,
+        venues: Array.isArray(data) ? data.map(mapVenueDatabaseRecord) : []
+    };
+}
+
+async function createCurrentWeddingVenue(venue) {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    const payload = mapVenueToDatabasePayload(venue);
+    const { data, error } = await client
+        .from("venues")
+        .insert({ ...payload, wedding_id: weddingId })
+        .select("*")
+        .maybeSingle();
+
+    if (error) {
+        throw createVenueSupabaseError(
+            error,
+            "Não foi possível adicionar o local. Verifique sua conexão e tente novamente.",
+            "VENUE_CREATE_FAILED"
+        );
+    }
+
+    if (!data) {
+        throw createSupabaseAppError(
+            "O local não foi criado. Verifique se sua conta ainda possui acesso ao casamento.",
+            "VENUE_CREATE_NOT_ALLOWED"
+        );
+    }
+
+    return mapVenueDatabaseRecord(data);
+}
+
+async function updateCurrentWeddingVenue(venueId, venue) {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    const payload = mapVenueToDatabasePayload(venue);
+    const { data, error } = await client
+        .from("venues")
+        .update(payload)
+        .eq("id", venueId)
+        .eq("wedding_id", weddingId)
+        .select("*")
+        .maybeSingle();
+
+    if (error) {
+        throw createVenueSupabaseError(
+            error,
+            "Não foi possível atualizar o local. Verifique sua conexão e tente novamente.",
+            "VENUE_UPDATE_FAILED"
+        );
+    }
+
+    if (!data) {
+        throw createSupabaseAppError(
+            "O local não foi atualizado. Verifique se ele ainda existe e se sua conta possui acesso.",
+            "VENUE_UPDATE_NOT_ALLOWED"
+        );
+    }
+
+    return mapVenueDatabaseRecord(data);
+}
+
+async function updateCurrentWeddingVenueFavorite(venueId, favorite) {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    const { data, error } = await client
+        .from("venues")
+        .update({ favorite: favorite === true })
+        .eq("id", venueId)
+        .eq("wedding_id", weddingId)
+        .select("*")
+        .maybeSingle();
+
+    if (error) {
+        throw createVenueSupabaseError(
+            error,
+            "Não foi possível atualizar o favorito. Verifique sua conexão e tente novamente.",
+            "VENUE_FAVORITE_FAILED"
+        );
+    }
+
+    if (!data) {
+        throw createSupabaseAppError(
+            "O favorito não foi atualizado. Verifique se sua conta ainda possui acesso ao local.",
+            "VENUE_FAVORITE_NOT_ALLOWED"
+        );
+    }
+
+    return mapVenueDatabaseRecord(data);
+}
+
+async function deleteCurrentWeddingVenue(venueId) {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    const { data, error } = await client
+        .from("venues")
+        .delete()
+        .eq("id", venueId)
+        .eq("wedding_id", weddingId)
+        .select("id")
+        .maybeSingle();
+
+    if (error) {
+        throw createVenueSupabaseError(
+            error,
+            "Não foi possível excluir o local. Verifique sua conexão e tente novamente.",
+            "VENUE_DELETE_FAILED"
+        );
+    }
+
+    if (!data) {
+        throw createSupabaseAppError(
+            "O local não foi excluído. Verifique se ele ainda existe e se sua conta possui acesso.",
+            "VENUE_DELETE_NOT_ALLOWED"
+        );
+    }
+
+    return { id: String(data.id) };
 }
 
 async function signInCouple({ email, password }) {

@@ -213,7 +213,7 @@ test("não confirma uma atualização que retornou zero linhas", async () => {
     );
 });
 
-test("mantém somente as áreas locais como fonte do estado persistido", () => {
+test("mantém locais apenas para migração e não os recria no saveState", () => {
     const originalStoredState = {
         settings: {
             partnerOne: "Valor antigo",
@@ -255,7 +255,11 @@ test("mantém somente as áreas locais como fonte do estado persistido", () => {
         weddingDate: ""
     });
     assert.deepEqual(loadedState.guests, [{ id: "guest-1" }]);
-    assert.deepEqual(loadedState.venues, [{ id: "venue-1" }]);
+    assert.deepEqual(loadedState.venues, []);
+    assert.deepEqual(
+        vm.runInContext("loadLegacyVenues()", context),
+        [{ id: "venue-1" }]
+    );
     assert.deepEqual(loadedState.tasks, [{ id: "task-1" }]);
     assert.deepEqual(loadedState.expenses, [{ id: "expense-1" }]);
 
@@ -278,6 +282,13 @@ test("mantém somente as áreas locais como fonte do estado persistido", () => {
     assert.deepEqual(persistedState.venues, [{ id: "venue-1" }]);
     assert.deepEqual(persistedState.tasks, [{ id: "task-1" }]);
     assert.deepEqual(persistedState.expenses, [{ id: "expense-1" }]);
+
+    vm.runInContext("removeLegacyVenues(); saveState()", context);
+    const stateAfterMigration = JSON.parse(storedValue);
+    assert.equal(Object.hasOwn(stateAfterMigration, "venues"), false);
+    assert.deepEqual(stateAfterMigration.guests, [{ id: "guest-1" }, { id: "guest-2" }]);
+    assert.deepEqual(stateAfterMigration.tasks, [{ id: "task-1" }]);
+    assert.deepEqual(stateAfterMigration.expenses, [{ id: "expense-1" }]);
 });
 
 test("todas as páginas internas carregam Supabase antes do app", () => {
