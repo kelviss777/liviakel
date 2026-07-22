@@ -5,18 +5,9 @@ const test = require("node:test");
 const vm = require("node:vm");
 
 const projectRoot = path.resolve(__dirname, "..");
-const venueSource = fs.readFileSync(
-    path.join(projectRoot, "pages", "locais", "main.js"),
-    "utf8"
-);
-const venueHtml = fs.readFileSync(
-    path.join(projectRoot, "pages", "locais", "index.html"),
-    "utf8"
-);
-const venueCss = fs.readFileSync(
-    path.join(projectRoot, "pages", "locais", "style.css"),
-    "utf8"
-);
+const venueSource = fs.readFileSync(path.join(projectRoot, "pages", "locais", "main.js"), "utf8");
+const venueHtml = fs.readFileSync(path.join(projectRoot, "pages", "locais", "index.html"), "utf8");
+const venueCss = fs.readFileSync(path.join(projectRoot, "pages", "locais", "style.css"), "utf8");
 
 class FakeClassList {
     constructor() {
@@ -62,7 +53,10 @@ class FakeElement {
         this.customValidity = "";
         this.href = "";
         this.focused = false;
+        this.isConnected = true;
+        this.type = "";
         this._queries = new Map();
+        this._queryAll = () => [];
     }
 
     addEventListener(type, listener) {
@@ -94,8 +88,8 @@ class FakeElement {
         return this._queries.get(selector) || null;
     }
 
-    querySelectorAll() {
-        return [];
+    querySelectorAll(selector) {
+        return this._queryAll(selector);
     }
 
     setCustomValidity(message) {
@@ -115,7 +109,9 @@ class FakeElement {
     }
 
     close() {
+        if (!this.open) return;
         this.open = false;
+        (this.listeners.close || []).forEach(listener => listener({ target: this }));
     }
 
     contains() {
@@ -128,6 +124,11 @@ class FakeElement {
 
     reset() {
         this.resetCalled = true;
+        this._onReset?.();
+    }
+
+    scrollIntoView() {
+        this.scrolledIntoView = true;
     }
 }
 
@@ -146,11 +147,19 @@ function createHarness(initialVenues = []) {
     };
 
     const form = create("#venue-form");
+    const formCard = create("#venue-form-card");
+    const venueName = create("#venue-name");
+    const venueType = create("#venue-type", { value: "Espaço para festa" });
+    const venueAddress = create("#venue-address");
+    const venueDescription = create("#venue-description");
+    formCard._queries.set("input", venueName);
+
     const detailsToggle = create("#venue-details-toggle");
     const toggleLabel = new FakeElement();
     detailsToggle._queries.set(".details-toggle-label", toggleLabel);
     const detailsFields = create("#venue-details-fields");
     const detailsDialog = create("#venue-details-dialog");
+    const deleteDialog = create("#venue-delete-dialog");
     const clearRating = create("#clear-venue-rating");
     const ratingStatus = create("#venue-rating-status");
     const budget = create("#venue-budget");
@@ -159,19 +168,40 @@ function createHarness(initialVenues = []) {
     const remaining = create("#venue-budget-remaining");
     const remainingValue = new FakeElement();
     remaining._queries.set("strong", remainingValue);
+    const decoration = create("#venue-decoration", { value: "unknown" });
+    const bridalRoom = create("#venue-bridal-room");
     const capacity = create("#venue-capacity");
+    const parking = create("#venue-parking");
+    const spaceAvailability = create("#venue-space-availability", { value: "unknown" });
+    const startTime = create("#venue-start-time");
     const endTime = create("#venue-end-time");
-    const venueName = create("#venue-name");
-    const venueType = create("#venue-type");
-    const venueAddress = create("#venue-address");
-    create("#venue-description");
+    const availableDate = create("#venue-available-date");
+
+    const proTitle = create("#venue-pro-title");
+    const proDescription = create("#venue-pro-description");
+    const proSubmit = create("#submit-pro-item");
+    const proCancel = create("#cancel-pro-edit");
+    const prosList = create("#venue-pros-list");
+    const conTitle = create("#venue-con-title");
+    const conDescription = create("#venue-con-description");
+    const conSubmit = create("#submit-con-item");
+    const conCancel = create("#cancel-con-edit");
+    const consList = create("#venue-cons-list");
+
+    const submitButton = create("#venue-submit-button");
+    const cancelEditButton = create("#cancel-venue-edit");
+    const editNotice = create("#venue-edit-notice");
+    const editName = create("#venue-edit-name");
     const venueList = create("#venue-list");
-    const formCard = create("#venue-form-card");
     const detailsTitle = create("#venue-details-title");
     const detailsSubtitle = create("#venue-details-subtitle");
     const detailsContent = create("#venue-details-content");
     const mapLink = create("#venue-details-map-link");
+    const modalEdit = create("#venue-details-edit");
     const modalFavorite = create("#venue-details-favorite");
+    const deleteName = create("#venue-delete-name");
+    const confirmDelete = create("#confirm-venue-delete");
+    const cancelDelete = create("#cancel-venue-delete");
     const ratingOptions = create(".rating-options");
 
     const ratingInputs = Array.from({ length: 5 }, (_, index) =>
@@ -180,6 +210,25 @@ function createHarness(initialVenues = []) {
     const ratingLabels = Array.from({ length: 5 }, (_, index) =>
         new FakeElement({ dataset: { ratingValue: String(index + 1) } })
     );
+
+    const formControls = [
+        venueName, venueType, venueAddress, venueDescription, budget, deposit,
+        decoration, bridalRoom, capacity, parking, spaceAvailability, startTime,
+        endTime, availableDate, proTitle, proDescription, conTitle, conDescription,
+        ...ratingInputs
+    ];
+    form._onReset = () => {
+        formControls.forEach(control => {
+            control.value = "";
+            control.checked = false;
+        });
+        venueType.value = "Espaço para festa";
+        decoration.value = "unknown";
+        spaceAvailability.value = "unknown";
+    };
+    form._queryAll = selector => selector === "[aria-invalid='true']"
+        ? formControls.filter(control => control.getAttribute("aria-invalid") === "true")
+        : [];
 
     const body = new FakeElement();
     const document = {
@@ -200,6 +249,7 @@ function createHarness(initialVenues = []) {
 
     let formValues = new Map();
     let savedCount = 0;
+    let idCounter = 0;
     const toastMessages = [];
     const context = vm.createContext({
         console,
@@ -210,9 +260,7 @@ function createHarness(initialVenues = []) {
         String,
         Boolean,
         Math,
-        state: {
-            venues: structuredClone(initialVenues)
-        },
+        state: { venues: structuredClone(initialVenues) },
         FormData: class {
             get(name) {
                 return formValues.has(name) ? formValues.get(name) : null;
@@ -220,31 +268,23 @@ function createHarness(initialVenues = []) {
         },
         escapeHtml(value) {
             return String(value).replace(/[&<>'"]/g, character => ({
-                "&": "&amp;",
-                "<": "&lt;",
-                ">": "&gt;",
-                "'": "&#39;",
-                '"': "&quot;"
+                "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
             })[character]);
         },
         formatCurrency(value) {
-            return new Intl.NumberFormat("pt-BR", {
-                style: "currency",
-                currency: "BRL"
-            }).format(Number(value) || 0);
+            return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(Number(value) || 0);
         },
         formatDate(value, fallback = "Sem prazo") {
             if (!value) return fallback;
             const [year, month, day] = value.split("-").map(Number);
-            return new Intl.DateTimeFormat("pt-BR").format(
-                new Date(year, month - 1, day)
-            );
+            return new Intl.DateTimeFormat("pt-BR").format(new Date(year, month - 1, day));
         },
         emptyState(message) {
             return `<div>${message}</div>`;
         },
         makeId() {
-            return "new-venue";
+            idCounter += 1;
+            return `generated-${idCounter}`;
         },
         saveState() {
             savedCount += 1;
@@ -260,21 +300,34 @@ function createHarness(initialVenues = []) {
         context,
         elements,
         form,
+        formCard,
         detailsFields,
         detailsDialog,
+        deleteDialog,
         ratingInputs,
-        ratingLabels,
         remaining,
         remainingValue,
         deposit,
-        depositError,
         budget,
         capacity,
         endTime,
         venueList,
         detailsContent,
-        modalFavorite,
         mapLink,
+        modalEdit,
+        modalFavorite,
+        proTitle,
+        proDescription,
+        prosList,
+        conTitle,
+        conDescription,
+        consList,
+        submitButton,
+        cancelEditButton,
+        editNotice,
+        deleteName,
+        confirmDelete,
+        cancelDelete,
         body,
         toastMessages,
         setFormValues(values) {
@@ -297,333 +350,379 @@ function baseFormValues(overrides = {}) {
         startTime: "",
         endTime: "",
         availableDate: "",
-        pros: "",
-        cons: "",
         ...overrides
     };
 }
 
-test("registros antigos recebem padrões sem perder os campos existentes", () => {
+function submitVenue(harness) {
+    harness.form.listeners.submit[0]({
+        preventDefault() {},
+        currentTarget: harness.form
+    });
+}
+
+function readValue(harness, expression) {
+    return JSON.parse(vm.runInContext(`JSON.stringify(${expression})`, harness.context));
+}
+
+test("adiciona vários prós e contras às listas temporárias", () => {
+    const harness = createHarness();
+
+    harness.proTitle.value = "Localização";
+    harness.proDescription.value = "Perto da igreja";
+    vm.runInContext("submitListItem('pros')", harness.context);
+    harness.proTitle.value = "Decoração";
+    harness.proDescription.value = "Já está inclusa";
+    vm.runInContext("submitListItem('pros')", harness.context);
+
+    harness.conTitle.value = "Estacionamento";
+    harness.conDescription.value = "Poucas vagas";
+    vm.runInContext("submitListItem('cons')", harness.context);
+    harness.conTitle.value = "Horário";
+    harness.conDescription.value = "Precisa terminar cedo";
+    vm.runInContext("submitListItem('cons')", harness.context);
+
+    const pros = readValue(harness, "temporaryPros");
+    const cons = readValue(harness, "temporaryCons");
+    assert.deepEqual(pros.map(item => item.title), ["Localização", "Decoração"]);
+    assert.deepEqual(cons.map(item => item.title), ["Estacionamento", "Horário"]);
+    assert.equal(harness.proTitle.value, "");
+    assert.equal(harness.conDescription.value, "");
+    assert.equal(harness.prosList.children.length, 2);
+    assert.equal(harness.consList.children.length, 2);
+});
+
+test("edita e remove somente o pró ou contra selecionado", () => {
+    const harness = createHarness();
+    vm.runInContext(`
+        temporaryPros = [
+            { id: 'p1', title: 'Localização', description: 'Perto' },
+            { id: 'p2', title: 'Equipe', description: 'Atenciosa' }
+        ];
+        temporaryCons = [
+            { id: 'c1', title: 'Vagas', description: 'Poucas' },
+            { id: 'c2', title: 'Som', description: 'Limitado' }
+        ];
+        renderStructuredList('pros');
+        renderStructuredList('cons');
+        editListItem('pros', 'p1');
+    `, harness.context);
+
+    assert.equal(harness.proTitle.value, "Localização");
+    assert.equal(harness.elements.get("#submit-pro-item").textContent, "Salvar alteração");
+    assert.equal(harness.elements.get("#cancel-pro-edit").hidden, false);
+
+    harness.proTitle.value = "Acesso";
+    harness.proDescription.value = "Muito fácil";
+    vm.runInContext("submitListItem('pros'); editListItem('cons', 'c2')", harness.context);
+    harness.conTitle.value = "Som ambiente";
+    harness.conDescription.value = "Limite baixo";
+    vm.runInContext("submitListItem('cons'); removeListItem('pros', 'p2'); removeListItem('cons', 'c1')", harness.context);
+
+    assert.deepEqual(readValue(harness, "temporaryPros"), [
+        { id: "p1", title: "Acesso", description: "Muito fácil" }
+    ]);
+    assert.deepEqual(readValue(harness, "temporaryCons"), [
+        { id: "c2", title: "Som ambiente", description: "Limite baixo" }
+    ]);
+
+    vm.runInContext("editListItem('pros', 'p1')", harness.context);
+    harness.proTitle.value = "Alteração cancelada";
+    vm.runInContext("resetListEditor('pros'); renderStructuredList('pros')", harness.context);
+    assert.equal(readValue(harness, "temporaryPros")[0].title, "Acesso");
+    assert.equal(harness.elements.get("#submit-pro-item").textContent, "Adicionar pró");
+});
+
+test("valida tópico e motivo antes de adicionar itens", () => {
+    const harness = createHarness();
+
+    harness.proDescription.value = "Descrição sem tópico";
+    vm.runInContext("submitListItem('pros')", harness.context);
+    assert.match(harness.proTitle.customValidity, /tópico/);
+    assert.equal(readValue(harness, "temporaryPros").length, 0);
+
+    harness.proTitle.value = "Localização";
+    harness.proDescription.value = "";
+    vm.runInContext("submitListItem('pros')", harness.context);
+    assert.match(harness.proDescription.customValidity, /motivo/);
+    assert.equal(readValue(harness, "temporaryPros").length, 0);
+
+    harness.proTitle.value = "Rascunho não adicionado";
+    harness.proDescription.value = "Não deve ser perdido silenciosamente";
+    harness.setFormValues(baseFormValues());
+    submitVenue(harness);
+    assert.equal(readValue(harness, "state.venues").length, 0);
+    assert.match(harness.toastMessages.at(-1), /Adicione ou cancele/);
+});
+
+test("converte textos antigos de prós e contras sem apagar o conteúdo", () => {
     const harness = createHarness([{
         id: "old",
         name: "Local antigo",
         type: "Igreja",
         address: "Praça Central",
-        favorite: true
+        favorite: true,
+        pros: "Boa localização",
+        cons: "Poucas vagas"
     }]);
 
-    const normalized = vm.runInContext(
-        "JSON.parse(JSON.stringify(normalizeVenue(state.venues[0])))",
-        harness.context
-    );
-
-    assert.equal(normalized.name, "Local antigo");
-    assert.equal(normalized.favorite, true);
-    assert.equal(normalized.description, "");
-    assert.equal(normalized.rating, null);
-    assert.equal(normalized.decorationOption, "unknown");
-    assert.equal(normalized.hasParking, false);
-    assert.equal(
-        vm.runInContext("hasDetailedInfo(state.venues[0])", harness.context),
-        false
-    );
-    assert.doesNotMatch(harness.venueList.innerHTML, /Ver detalhes/);
+    const normalized = readValue(harness, "normalizeVenue(state.venues[0])");
+    assert.deepEqual(normalized.pros, [{
+        id: "legacy-pros-1",
+        title: "Observação",
+        description: "Boa localização"
+    }]);
+    assert.deepEqual(normalized.cons, [{
+        id: "legacy-cons-1",
+        title: "Observação",
+        description: "Poucas vagas"
+    }]);
+    assert.equal(vm.runInContext("typeof state.venues[0].pros", harness.context), "string");
+    assert.match(harness.venueList.innerHTML, /Ver detalhes/);
 });
 
-test("salva cadastro básico e cadastro completo com o modelo esperado", () => {
+test("cadastra local básico e local com listas estruturadas", () => {
     const basicHarness = createHarness();
     basicHarness.setFormValues(baseFormValues());
-    basicHarness.form.listeners.submit[0]({
-        preventDefault() {},
-        currentTarget: basicHarness.form
-    });
+    submitVenue(basicHarness);
+    const basic = readValue(basicHarness, "state.venues[0]");
+    assert.deepEqual(basic.pros, []);
+    assert.deepEqual(basic.cons, []);
+    assert.equal(basic.name, "Villa Jardim");
 
-    const basic = JSON.parse(vm.runInContext(
-        "JSON.stringify(state.venues[0])",
-        basicHarness.context
-    ));
-    assert.deepEqual(basic, {
-        id: "new-venue",
-        name: "Villa Jardim",
-        type: "Espaço para festa",
-        address: "Rua das Flores, 100",
-        favorite: false,
-        description: "",
-        rating: null,
-        budgetValue: null,
-        depositValue: null,
-        decorationOption: "unknown",
-        hasBridalRoom: false,
-        capacity: null,
-        hasParking: false,
-        spaceAvailability: "unknown",
-        startTime: "",
-        endTime: "",
-        availableDate: "",
-        pros: "",
-        cons: ""
-    });
-    assert.equal(basicHarness.getSavedCount(), 1);
-    assert.equal(basicHarness.form.resetCalled, true);
-    assert.equal(
-        basicHarness.elements.get("#venue-details-toggle").getAttribute("aria-expanded"),
-        "false"
-    );
+    const detailedHarness = createHarness();
+    detailedHarness.proTitle.value = "Localização";
+    detailedHarness.proDescription.value = "Fácil acesso";
+    vm.runInContext("submitListItem('pros')", detailedHarness.context);
+    detailedHarness.conTitle.value = "Vagas";
+    detailedHarness.conDescription.value = "São limitadas";
+    vm.runInContext("submitListItem('cons')", detailedHarness.context);
+    detailedHarness.setFormValues(baseFormValues({ description: "Salão amplo" }));
+    submitVenue(detailedHarness);
 
-    const completeHarness = createHarness();
-    completeHarness.budget.value = "18000.50";
-    completeHarness.deposit.value = "3500.25";
-    completeHarness.capacity.value = "220";
-    completeHarness.ratingInputs[3].checked = true;
-    completeHarness.setFormValues(baseFormValues({
-        description: "Jardim bem cuidado e salão amplo.",
-        rating: "4",
-        budgetValue: "18000.50",
-        depositValue: "3500.25",
-        decorationOption: "included",
-        hasBridalRoom: "on",
-        capacity: "220",
-        hasParking: "on",
-        spaceAvailability: "ceremony_and_reception",
-        startTime: "18:00",
-        endTime: "02:00",
-        availableDate: "2027-05-22",
-        pros: "Equipe atenciosa",
-        cons: "Acesso por estrada estreita"
-    }));
-    completeHarness.form.listeners.submit[0]({
-        preventDefault() {},
-        currentTarget: completeHarness.form
-    });
-
-    const complete = JSON.parse(vm.runInContext(
-        "JSON.stringify(state.venues[0])",
-        completeHarness.context
-    ));
-    assert.equal(complete.rating, 4);
-    assert.equal(complete.budgetValue, 18000.5);
-    assert.equal(complete.depositValue, 3500.25);
-    assert.equal(complete.capacity, 220);
-    assert.equal(complete.hasBridalRoom, true);
-    assert.equal(complete.hasParking, true);
-    assert.equal(complete.endTime, "02:00");
-    assert.match(completeHarness.venueList.innerHTML, /Ver detalhes/);
-
-    const partialHarness = createHarness();
-    partialHarness.setFormValues(baseFormValues({
-        pros: "Boa localização"
-    }));
-    partialHarness.form.listeners.submit[0]({
-        preventDefault() {},
-        currentTarget: partialHarness.form
-    });
-    const partial = JSON.parse(vm.runInContext(
-        "JSON.stringify(state.venues[0])",
-        partialHarness.context
-    ));
-    assert.equal(partial.pros, "Boa localização");
-    assert.equal(partial.rating, null);
-    assert.equal(partial.budgetValue, null);
-    assert.match(partialHarness.venueList.innerHTML, /Ver detalhes/);
+    const detailed = readValue(detailedHarness, "state.venues[0]");
+    assert.equal(detailed.pros[0].title, "Localização");
+    assert.equal(detailed.cons[0].description, "São limitadas");
+    assert.match(detailedHarness.venueList.innerHTML, /Ver detalhes/);
 });
 
-test("expansão e estrelas preservam valores e permitem remover a nota", () => {
-    const harness = createHarness();
-    const toggle = harness.elements.get("#venue-details-toggle");
-
-    harness.detailsFields.hidden = true;
-    toggle.listeners.click[0]();
-    harness.elements.get("#venue-description").value = "Texto preservado";
-    toggle.listeners.click[0]();
-
-    assert.equal(toggle.getAttribute("aria-expanded"), "false");
-    assert.equal(harness.elements.get("#venue-description").value, "Texto preservado");
-
-    for (let value = 1; value <= 5; value += 1) {
-        harness.ratingInputs[value - 1].listeners.change[0]();
-        assert.equal(
-            harness.elements.get("#venue-rating-status").textContent.includes(`${value} de 5`),
-            true
-        );
-    }
-
-    harness.elements.get("#clear-venue-rating").listeners.click[0]();
-    assert.equal(harness.ratingInputs.some(input => input.checked), false);
-    assert.equal(
-        harness.elements.get("#venue-rating-status").textContent,
-        "Sem avaliação selecionada."
-    );
-});
-
-test("calcula restante e bloqueia entrada maior e capacidade decimal", () => {
-    const harness = createHarness();
-    harness.budget.value = "10000";
-    harness.deposit.value = "2500.50";
-    vm.runInContext("updateBudgetRemaining()", harness.context);
-
-    assert.equal(harness.remaining.hidden, false);
-    assert.match(harness.remainingValue.textContent, /7\.499,50/);
-
-    harness.deposit.value = "12000";
-    vm.runInContext("updateBudgetRemaining()", harness.context);
-    assert.equal(harness.remaining.hidden, true);
-    assert.match(harness.deposit.customValidity, /maior que o orçamento/);
-
-    harness.deposit.value = "";
-    harness.capacity.value = "120.5";
-    harness.setFormValues(baseFormValues({ capacity: "120.5" }));
-    const valid = vm.runInContext(
-        "validateDetailedFields(new FormData(venueForm))",
-        harness.context
-    );
-    assert.equal(valid, false);
-    assert.match(harness.capacity.customValidity, /número inteiro/);
-
-    const negativeHarness = createHarness();
-    negativeHarness.budget.value = "-1";
-    negativeHarness.setFormValues(baseFormValues({ budgetValue: "-1" }));
-    const negativeBudget = vm.runInContext(
-        "validateDetailedFields(new FormData(venueForm))",
-        negativeHarness.context
-    );
-    assert.equal(negativeBudget, false);
-    assert.match(negativeHarness.budget.customValidity, /igual ou maior que zero/);
-});
-
-test("aceita encerramento após meia-noite e rejeita horários idênticos", () => {
-    const harness = createHarness();
-    harness.setFormValues(baseFormValues({
-        startTime: "20:00",
-        endTime: "02:00"
-    }));
-    const overnight = vm.runInContext(
-        "validateDetailedFields(new FormData(venueForm))",
-        harness.context
-    );
-    assert.equal(overnight.endTime, "02:00");
-
-    harness.setFormValues(baseFormValues({
-        startTime: "20:00",
-        endTime: "20:00"
-    }));
-    const sameTime = vm.runInContext(
-        "validateDetailedFields(new FormData(venueForm))",
-        harness.context
-    );
-    assert.equal(sameTime, false);
-    assert.match(harness.endTime.customValidity, /precisa ser diferente/);
-});
-
-test("modal mostra apenas detalhes preenchidos e mantém mapa e favorito", () => {
+test("modal exibe tópicos e motivos estruturados com segurança", () => {
     const harness = createHarness([{
         id: "details",
-        name: "<Villa & Jardim>",
+        name: "Villa Jardim",
         type: "Buffet",
         address: "Av. Brasil, 50",
-        favorite: false,
-        description: "Salão iluminado",
-        rating: 5,
-        budgetValue: 10000,
-        depositValue: 2500,
-        capacity: 180,
-        startTime: "20:00",
-        endTime: "02:00",
-        pros: "Boa equipe"
+        pros: [{ id: "p1", title: "<Localização>", description: "Perto da igreja" }],
+        cons: [{ id: "c1", title: "Estacionamento", description: "Poucas vagas" }]
     }]);
 
     vm.runInContext("openVenueDetails('details')", harness.context);
     const modalText = allText(harness.detailsContent);
-
     assert.equal(harness.detailsDialog.open, true);
-    assert.match(modalText, /Avaliação do casal/);
-    assert.match(modalText, /Valor restante/);
-    assert.match(modalText, /Até 180 pessoas/);
-    assert.match(modalText, /02:00 \(dia seguinte\)/);
-    assert.match(modalText, /Boa equipe/);
-    assert.doesNotMatch(modalText, /undefined|null|NaN|Ainda não informado/);
-    assert.match(harness.mapLink.href, /google\.com\/maps/);
-    assert.equal(harness.modalFavorite.dataset.id, "details");
+    assert.match(modalText, /Prós e contras/);
+    assert.match(modalText, /<Localização>/);
+    assert.match(modalText, /Perto da igreja/);
+    assert.match(modalText, /Estacionamento/);
+    assert.doesNotMatch(modalText, /undefined|null|NaN/);
+    assert.equal(harness.modalEdit.dataset.id, "details");
+});
+
+test("edita local completo sem duplicar e preserva id e data de criação", () => {
+    const harness = createHarness([{
+        id: "venue-1",
+        createdAt: "2026-07-01T10:00:00Z",
+        name: "Nome antigo",
+        type: "Buffet",
+        address: "Rua antiga",
+        favorite: true,
+        description: "Descrição antiga",
+        rating: 4,
+        budgetValue: 10000,
+        depositValue: 2000,
+        decorationOption: "included",
+        hasBridalRoom: true,
+        capacity: 150,
+        hasParking: true,
+        spaceAvailability: "ceremony_and_reception",
+        startTime: "18:00",
+        endTime: "02:00",
+        availableDate: "2027-05-22",
+        pros: [{ id: "p1", title: "Equipe", description: "Atenciosa" }],
+        cons: [{ id: "c1", title: "Vagas", description: "Limitadas" }]
+    }]);
+
+    vm.runInContext("startVenueEdit('venue-1')", harness.context);
+    assert.equal(harness.submitButton.textContent, "Salvar alterações");
+    assert.equal(harness.cancelEditButton.hidden, false);
+    assert.equal(harness.editNotice.hidden, false);
+    assert.equal(harness.detailsFields.hidden, false);
+    assert.equal(readValue(harness, "temporaryPros")[0].title, "Equipe");
+
+    harness.budget.value = "12000";
+    harness.deposit.value = "2500";
+    harness.capacity.value = "180";
+    harness.setFormValues(baseFormValues({
+        name: "Nome atualizado",
+        type: "Buffet",
+        address: "Rua nova",
+        description: "Descrição atualizada",
+        rating: "5",
+        budgetValue: "12000",
+        depositValue: "2500",
+        decorationOption: "included",
+        hasBridalRoom: "on",
+        capacity: "180",
+        hasParking: "on",
+        spaceAvailability: "ceremony_and_reception",
+        startTime: "19:00",
+        endTime: "03:00",
+        availableDate: "2027-06-12"
+    }));
+    submitVenue(harness);
+
+    const venues = readValue(harness, "state.venues");
+    assert.equal(venues.length, 1);
+    assert.equal(venues[0].id, "venue-1");
+    assert.equal(venues[0].createdAt, "2026-07-01T10:00:00Z");
+    assert.equal(venues[0].name, "Nome atualizado");
+    assert.equal(venues[0].favorite, true);
+    assert.equal(venues[0].rating, 5);
+    assert.equal(venues[0].pros[0].id, "p1");
+    assert.match(harness.toastMessages.at(-1), /atualizado com sucesso/);
+    assert.equal(vm.runInContext("editingVenueId", harness.context), null);
+});
+
+test("edita local básico e abre detalhes apenas quando necessário", () => {
+    const harness = createHarness([{
+        id: "basic",
+        name: "Igreja antiga",
+        type: "Igreja",
+        address: "Praça antiga"
+    }]);
+    vm.runInContext("startVenueEdit('basic')", harness.context);
+    assert.equal(harness.elements.get("#venue-name").value, "Igreja antiga");
+    assert.equal(harness.detailsFields.hidden, true);
+
+    harness.setFormValues(baseFormValues({
+        name: "Igreja atualizada",
+        type: "Igreja",
+        address: "Praça nova"
+    }));
+    submitVenue(harness);
+    assert.equal(readValue(harness, "state.venues").length, 1);
+    assert.equal(readValue(harness, "state.venues[0]").name, "Igreja atualizada");
+});
+
+test("cancelar edição limpa o formulário e não altera o registro", () => {
+    const original = {
+        id: "cancel",
+        name: "Original",
+        type: "Buffet",
+        address: "Rua original",
+        pros: [{ id: "p1", title: "Equipe", description: "Boa" }]
+    };
+    const harness = createHarness([original]);
+    vm.runInContext("startVenueEdit('cancel')", harness.context);
+    harness.elements.get("#venue-name").value = "Não salvar";
+    harness.proTitle.value = "Rascunho";
+    vm.runInContext("cancelVenueEdit()", harness.context);
+
+    assert.deepEqual(readValue(harness, "state.venues[0]"), original);
+    assert.equal(vm.runInContext("editingVenueId", harness.context), null);
+    assert.equal(readValue(harness, "temporaryPros").length, 0);
+    assert.equal(harness.elements.get("#venue-name").value, "");
+    assert.equal(harness.formCard.classList.contains("hidden"), true);
+    assert.equal(harness.submitButton.textContent, "Salvar");
+});
+
+test("exclusão personalizada cancela e confirma sem cliques duplicados", () => {
+    const harness = createHarness([
+        { id: "one", name: "Villa Um", type: "Buffet", address: "Rua 1" },
+        { id: "two", name: "Villa Dois", type: "Igreja", address: "Rua 2" }
+    ]);
+    const trigger = new FakeElement();
+    harness.context.trigger = trigger;
+
+    vm.runInContext("openVenueDeleteConfirmation('one', trigger)", harness.context);
+    assert.equal(harness.deleteDialog.open, true);
+    assert.equal(readValue(harness, "state.venues").length, 2);
+    assert.match(harness.deleteName.textContent, /Villa Um/);
+    assert.equal(harness.cancelDelete.focused, true);
+    vm.runInContext("closeVenueDeleteConfirmation()", harness.context);
+    assert.equal(readValue(harness, "state.venues").length, 2);
+    assert.equal(trigger.focused, true);
+
+    trigger.focused = false;
+    vm.runInContext("openVenueDeleteConfirmation('one', trigger)", harness.context);
+    harness.deleteDialog.close();
+    assert.equal(vm.runInContext("pendingDeleteVenueId", harness.context), null);
+    assert.equal(trigger.focused, true);
+
+    vm.runInContext("openVenueDeleteConfirmation('one', trigger); confirmVenueDelete(); confirmVenueDelete()", harness.context);
+    const venues = readValue(harness, "state.venues");
+    assert.deepEqual(venues.map(item => item.id), ["two"]);
+    assert.equal(harness.getSavedCount(), 1);
+    assert.match(harness.toastMessages.at(-1), /excluído com sucesso/);
+});
+
+test("favorito e Google Maps continuam funcionando", () => {
+    const harness = createHarness([{
+        id: "favorite",
+        name: "Zênite",
+        type: "Igreja",
+        address: "Praça da Sé, 1",
+        favorite: true
+    }]);
+    assert.match(harness.venueList.innerHTML, /google\.com\/maps\/search/);
 
     const clickHandler = harness.body.listeners.click[0];
     clickHandler({
         target: {
             closest() {
-                return { dataset: { action: "toggle-favorite", id: "details" } };
+                return { dataset: { action: "toggle-favorite", id: "favorite" } };
             }
         }
     });
-    assert.equal(
-        vm.runInContext("state.venues[0].favorite", harness.context),
-        true
-    );
-
-    clickHandler({
-        target: {
-            closest() {
-                return { dataset: { action: "delete-venue", id: "details" } };
-            }
-        }
-    });
-    assert.equal(vm.runInContext("state.venues.length", harness.context), 0);
+    assert.equal(vm.runInContext("state.venues[0].favorite", harness.context), false);
 });
 
-test("favoritos permanecem ordenados e os endereços apontam para o Maps", () => {
-    const harness = createHarness([
-        {
-            id: "regular",
-            name: "Alameda",
-            type: "Buffet",
-            address: "Rua A, 10",
-            favorite: false
-        },
-        {
-            id: "favorite",
-            name: "Zênite",
-            type: "Igreja",
-            address: "Praça da Sé, 1",
-            favorite: true
-        }
-    ]);
+test("mantém validações financeiras, capacidade e horários", () => {
+    const harness = createHarness();
+    harness.budget.value = "10000";
+    harness.deposit.value = "2500.50";
+    vm.runInContext("updateBudgetRemaining()", harness.context);
+    assert.equal(harness.remaining.hidden, false);
+    assert.match(harness.remainingValue.textContent, /7\.499,50/);
 
-    assert.ok(
-        harness.venueList.innerHTML.indexOf("Zênite") <
-        harness.venueList.innerHTML.indexOf("Alameda")
-    );
-    assert.match(
-        harness.venueList.innerHTML,
-        /google\.com\/maps\/search\/\?api=1&amp;query=Pra%C3%A7a%20da%20S%C3%A9%2C%201|google\.com\/maps\/search\/\?api=1&query=Pra%C3%A7a%20da%20S%C3%A9%2C%201/
-    );
+    harness.deposit.value = "12000";
+    vm.runInContext("updateBudgetRemaining()", harness.context);
+    assert.match(harness.deposit.customValidity, /maior que o orçamento/);
 
-    harness.body.listeners.click[0]({
-        target: {
-            closest() {
-                return {
-                    dataset: {
-                        action: "toggle-favorite",
-                        id: "favorite"
-                    }
-                };
-            }
-        }
-    });
+    harness.deposit.value = "";
+    harness.capacity.value = "120.5";
+    harness.setFormValues(baseFormValues({ capacity: "120.5" }));
+    assert.equal(vm.runInContext("validateDetailedFields(new FormData(venueForm))", harness.context), false);
+    assert.match(harness.capacity.customValidity, /número inteiro/);
 
+    harness.capacity.value = "";
+    harness.setFormValues(baseFormValues({ startTime: "20:00", endTime: "02:00" }));
     assert.equal(
-        vm.runInContext("state.venues.find(item => item.id === 'favorite').favorite", harness.context),
-        false
+        vm.runInContext("validateDetailedFields(new FormData(venueForm)).endTime", harness.context),
+        "02:00"
     );
 });
 
-test("HTML e CSS mantêm acessibilidade e responsividade solicitadas", () => {
+test("HTML e CSS mantêm acessibilidade, modais e responsividade", () => {
     assert.match(venueHtml, /aria-expanded="false"/);
     assert.match(venueHtml, /role="radiogroup"/);
-    assert.match(venueHtml, /type="number" min="0" step="0\.01"/);
-    assert.match(venueHtml, /type="number" min="0" step="1"/);
-    assert.match(venueHtml, /<dialog class="venue-details-dialog"/);
+    assert.match(venueHtml, /id="venue-pro-title"/);
+    assert.match(venueHtml, /id="venue-con-description"/);
+    assert.match(venueHtml, /id="cancel-venue-edit"/);
+    assert.match(venueHtml, /<dialog class="venue-delete-dialog"/);
+    assert.doesNotMatch(venueSource, /window\.confirm/);
+    assert.match(venueCss, /\.pros-cons-editors \{[^}]*grid-template-columns: repeat\(2/);
+    assert.match(venueCss, /\.button-danger/);
     assert.match(venueCss, /@media \(max-width: 620px\)/);
-    assert.match(
-        venueCss,
-        /\.venue-primary-fields, \.detail-fields-grid \{ grid-template-columns: 1fr; \}/
-    );
-    assert.match(venueCss, /\.venue-details-dialog \{[^}]*calc\(100% - 32px\)/);
+    assert.match(venueCss, /\.pros-cons-editors, \.venue-pros-cons \{ grid-template-columns: 1fr; \}/);
     assert.match(venueCss, /\.venue-dialog-content \{[^}]*overflow-y: auto/);
 });

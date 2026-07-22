@@ -37,6 +37,14 @@
 
                 <article class="form-card hidden" id="venue-form-card">
                     <form id="venue-form" novalidate>
+                        <div class="venue-edit-notice" id="venue-edit-notice" hidden>
+                            <div>
+                                <span>Modo de edição</span>
+                                <strong id="venue-edit-name"></strong>
+                            </div>
+                            <p>Faça as alterações necessárias e salve para atualizar este local.</p>
+                        </div>
+
                         <div class="venue-primary-fields">
                             <div class="field field-grow">
                                 <label for="venue-name">Nome do local</label>
@@ -88,13 +96,46 @@
                                         <p class="field-help" id="venue-rating-status" aria-live="polite">Sem avaliação selecionada.</p>
                                     </fieldset>
 
-                                    <div class="field">
-                                        <label for="venue-pros">Prós</label>
-                                        <textarea id="venue-pros" name="pros" rows="3" placeholder="O que mais agradou vocês"></textarea>
-                                    </div>
-                                    <div class="field">
-                                        <label for="venue-cons">Contras</label>
-                                        <textarea id="venue-cons" name="cons" rows="3" placeholder="Pontos que merecem atenção"></textarea>
+                                    <div class="pros-cons-editors detail-field-full">
+                                        <section class="list-editor" aria-labelledby="venue-pros-heading">
+                                            <header>
+                                                <h4 id="venue-pros-heading">Prós</h4>
+                                                <span>O que mais agradou vocês</span>
+                                            </header>
+                                            <div class="field">
+                                                <label for="venue-pro-title">Tópico</label>
+                                                <input id="venue-pro-title" autocomplete="off" placeholder="Ex.: Localização">
+                                            </div>
+                                            <div class="field">
+                                                <label for="venue-pro-description">Motivo</label>
+                                                <textarea id="venue-pro-description" rows="3" placeholder="Explique por que este é um ponto positivo"></textarea>
+                                            </div>
+                                            <div class="list-editor-actions">
+                                                <button class="button button-ghost list-cancel-button" id="cancel-pro-edit" type="button" data-list-action="cancel" data-list-type="pros" hidden>Cancelar</button>
+                                                <button class="button button-ghost list-submit-button" id="submit-pro-item" type="button" data-list-action="submit" data-list-type="pros">Adicionar pró</button>
+                                            </div>
+                                            <div class="structured-list" id="venue-pros-list" aria-live="polite"></div>
+                                        </section>
+
+                                        <section class="list-editor" aria-labelledby="venue-cons-heading">
+                                            <header>
+                                                <h4 id="venue-cons-heading">Contras</h4>
+                                                <span>Pontos que merecem atenção</span>
+                                            </header>
+                                            <div class="field">
+                                                <label for="venue-con-title">Tópico</label>
+                                                <input id="venue-con-title" autocomplete="off" placeholder="Ex.: Estacionamento">
+                                            </div>
+                                            <div class="field">
+                                                <label for="venue-con-description">Motivo</label>
+                                                <textarea id="venue-con-description" rows="3" placeholder="Explique por que este ponto merece atenção"></textarea>
+                                            </div>
+                                            <div class="list-editor-actions">
+                                                <button class="button button-ghost list-cancel-button" id="cancel-con-edit" type="button" data-list-action="cancel" data-list-type="cons" hidden>Cancelar</button>
+                                                <button class="button button-ghost list-submit-button" id="submit-con-item" type="button" data-list-action="submit" data-list-type="cons">Adicionar contra</button>
+                                            </div>
+                                            <div class="structured-list" id="venue-cons-list" aria-live="polite"></div>
+                                        </section>
                                     </div>
                                 </div>
                             </fieldset>
@@ -183,7 +224,8 @@
                         </div>
 
                         <div class="venue-form-actions">
-                            <button class="button button-primary form-submit" type="submit">Salvar</button>
+                            <button class="button button-ghost" id="cancel-venue-edit" type="button" hidden>Cancelar edição</button>
+                            <button class="button button-primary form-submit" id="venue-submit-button" type="submit">Salvar</button>
                         </div>
                     </form>
                 </article>
@@ -210,7 +252,28 @@
             <div class="venue-dialog-content" id="venue-details-content"></div>
             <footer class="venue-dialog-actions">
                 <a class="button button-ghost" id="venue-details-map-link" target="_blank" rel="noopener noreferrer">Abrir no Google Maps</a>
+                <button class="button button-ghost" id="venue-details-edit" data-action="edit-venue" type="button">Editar</button>
                 <button class="button button-primary" id="venue-details-favorite" data-action="toggle-favorite" type="button"></button>
+            </footer>
+        </article>
+    </dialog>
+
+    <dialog class="venue-delete-dialog" id="venue-delete-dialog" aria-labelledby="venue-delete-title" aria-describedby="venue-delete-description">
+        <article>
+            <header class="venue-dialog-header">
+                <div>
+                    <p class="eyebrow">Ação permanente</p>
+                    <h2 id="venue-delete-title">Excluir local?</h2>
+                </div>
+                <button class="icon-button" data-action="cancel-venue-delete" type="button" aria-label="Fechar confirmação">×</button>
+            </header>
+            <div class="venue-delete-content">
+                <p id="venue-delete-description">Tem certeza de que deseja excluir <strong id="venue-delete-name"></strong>?</p>
+                <p>Essa ação não poderá ser desfeita.</p>
+            </div>
+            <footer class="venue-dialog-actions">
+                <button class="button button-ghost" id="cancel-venue-delete" data-action="cancel-venue-delete" type="button">Cancelar</button>
+                <button class="button button-danger" id="confirm-venue-delete" data-action="confirm-venue-delete" type="button">Excluir local</button>
             </footer>
         </article>
     </dialog>
