@@ -442,8 +442,22 @@ Object.assign(globalThis, {
     createCurrentWeddingVenue,
     updateCurrentWeddingVenue,
     updateCurrentWeddingVenueFavorite,
-    deleteCurrentWeddingVenue
+    deleteCurrentWeddingVenue,
+    signOutCurrentUser
 });
+
+async function signOutCurrentUser() {
+    const client = await getSupabaseClient();
+    const { error } = await client.auth.signOut({ scope: "local" });
+
+    if (error) {
+        throw createSupabaseAppError(
+            "Não foi possível sair da conta. Tente novamente.",
+            "SIGN_OUT_FAILED",
+            error
+        );
+    }
+}
 
 async function signInCouple({ email, password }) {
     const client = await getSupabaseClient();
