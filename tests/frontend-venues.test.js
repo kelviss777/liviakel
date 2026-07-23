@@ -1123,7 +1123,7 @@ test("HTML e CSS mantêm acessibilidade, modais e responsividade", () => {
     assert.match(venueCss, /\.venue-dialog-content \{[^}]*overflow-y: auto/);
     assert.doesNotMatch(venueSource, /saveState\s*\(/);
     assert.doesNotMatch(venueSource, /await\s+createCurrentWeddingVenue\s*\(/);
-    assert.match(venueHtml, /supabase\.js\?v=20260721-venues-2/);
+    assert.match(venueHtml, /supabase\.js\?v=20260722-logout-1/);
     assert.match(venueHtml, /app\.js\?v=20260721-venues-2/);
     assert.match(venueHtml, /main\.js\?v=20260721-venues-2/);
 });
