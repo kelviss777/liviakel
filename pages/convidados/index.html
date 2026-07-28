@@ -4,17 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#744b61">
-    <title>Nosso Casamento</title>
+    <title>Convidados | Nosso Casamento</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="../../assets/global.css">
     <link rel="stylesheet" href="../../components/sidebar.css?v=20260722-logout-1">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=20260728-guests-2">
     <script src="../../js/supabase.js?v=20260722-logout-1" defer></script>
     <script src="../../js/app.js" defer></script>
     <script src="../../components/sidebar.js?v=20260722-logout-1" defer></script>
-    <script src="main.js" defer></script>
+    <script src="main.js?v=20260728-guests-2" defer></script>
 </head>
 <body data-page="convidados">
     <div class="app-shell">
@@ -29,30 +29,184 @@
                 <button class="button button-ghost" id="open-settings" type="button">Editar casamento</button>
             </header>
 
-            <section class="page active" id="convidados" aria-labelledby="page-title">
-                <div class="section-toolbar">
-                    <div><p class="section-description">Organize a lista e acompanhe as confirmações.</p></div>
-                    <button class="button button-primary" data-toggle-form="guest-form-card" type="button">+ Adicionar convidado</button>
+            <section class="page active guest-page" id="convidados" aria-labelledby="page-title">
+                <div class="guest-heading">
+                    <div>
+                        <p class="section-description">Organize com carinho cada pessoa que fará parte desse dia.</p>
+                        <p class="guest-count-note" id="guest-count-note">Sua lista começa por aqui.</p>
+                    </div>
+                    <div class="heading-actions">
+                        <button class="button button-ghost" id="open-complete-guest-list" type="button">Ver lista completa</button>
+                        <button class="button button-ghost" id="export-guests" type="button">Exportar em PDF</button>
+                        <button class="button button-primary" id="open-guest-wizard" type="button">+ Adicionar convidados</button>
+                    </div>
                 </div>
 
-                <article class="form-card hidden" id="guest-form-card">
-                    <form id="guest-form">
-                        <div class="field field-grow"><label for="guest-name">Nome</label><input id="guest-name" name="name" required placeholder="Nome do convidado"></div>
-                        <div class="field"><label for="guest-group">Grupo</label><select id="guest-group" name="group"><option>Família</option><option>Amigos</option><option>Trabalho</option><option>Outros</option></select></div>
-                        <div class="field"><label for="guest-status">Status</label><select id="guest-status" name="status"><option value="pending">Aguardando</option><option value="confirmed">Confirmado</option><option value="declined">Não vai</option></select></div>
-                        <button class="button button-primary form-submit" type="submit">Salvar</button>
-                    </form>
-                </article>
+                <section class="guest-summary" aria-label="Resumo da lista de convidados">
+                    <div class="summary-item"><strong id="summary-people">0</strong><span>pessoas</span></div>
+                    <div class="summary-divider" aria-hidden="true"></div>
+                    <div class="summary-item"><strong id="summary-groups">0</strong><span>grupos</span></div>
+                    <div class="summary-divider" aria-hidden="true"></div>
+                    <div class="summary-item"><strong id="summary-closed">0</strong><span>fechados</span></div>
+                    <div class="summary-divider" aria-hidden="true"></div>
+                    <div class="summary-item"><strong id="summary-open">0</strong><span>em aberto</span></div>
+                </section>
 
-                <article class="panel table-panel">
-                    <div class="list-controls">
-                        <label class="search-box"><span>⌕</span><input id="guest-search" type="search" placeholder="Buscar convidado"></label>
-                        <select id="guest-filter" aria-label="Filtrar convidados"><option value="all">Todos os status</option><option value="confirmed">Confirmados</option><option value="pending">Aguardando</option><option value="declined">Não vão</option></select>
+                <section class="guest-controls" aria-label="Busca e filtros">
+                    <label class="search-box" for="guest-search">
+                        <span aria-hidden="true">⌕</span>
+                        <input id="guest-search" type="search" placeholder="Buscar grupo ou convidado" autocomplete="off">
+                    </label>
+                    <div class="filter-group">
+                        <label class="sr-only" for="guest-state-filter">Filtrar por situação</label>
+                        <select id="guest-state-filter">
+                            <option value="all">Todos</option>
+                            <option value="open">Em aberto</option>
+                            <option value="closed">Fechados</option>
+                        </select>
+                        <label class="sr-only" for="guest-category-filter">Filtrar por categoria</label>
+                        <select id="guest-category-filter">
+                            <option value="all">Todas as categorias</option>
+                            <option value="godparents">Padrinhos</option>
+                            <option value="family">Famílias</option>
+                            <option value="couples">Casais</option>
+                            <option value="individual_group">Grupos de avulsos</option>
+                        </select>
                     </div>
-                    <div class="data-list" id="guest-list"></div>
-                </article>
+                </section>
+
+                <div class="guest-results-meta" id="guest-results-meta" aria-live="polite"></div>
+                <section class="guest-grid" id="guest-list" aria-label="Grupos de convidados"></section>
             </section>
         </main>
     </div>
+
+    <dialog class="guest-wizard-dialog" id="guest-wizard-dialog" aria-labelledby="wizard-title">
+        <article class="wizard-shell">
+            <header class="wizard-header">
+                <div>
+                    <p class="eyebrow" id="wizard-eyebrow">Adicionar convidados</p>
+                    <h2 id="wizard-title">Quem vamos adicionar?</h2>
+                    <p id="wizard-subtitle">Escolha como essas pessoas fazem parte da história de vocês.</p>
+                </div>
+                <button class="icon-button" id="close-guest-wizard" type="button" aria-label="Cancelar e fechar">×</button>
+            </header>
+
+            <div class="wizard-progress" aria-label="Progresso do cadastro">
+                <span class="progress-bar" id="wizard-progress-bar"></span>
+                <ol>
+                    <li data-progress-step="1"><span>1</span><small>Categoria</small></li>
+                    <li data-progress-step="2"><span>2</span><small>Nomes</small></li>
+                    <li data-progress-step="3"><span>3</span><small>Revisão</small></li>
+                </ol>
+            </div>
+
+            <div class="wizard-content" id="wizard-content">
+                <section class="wizard-step" data-wizard-step="1" aria-labelledby="category-step-title">
+                    <h3 class="sr-only" id="category-step-title">Escolha a categoria</h3>
+                    <div class="choice-grid category-choice-grid" id="category-choices" role="radiogroup" aria-label="Categoria dos convidados">
+                        <button class="choice-card" type="button" role="radio" aria-checked="false" data-category="godparents">
+                            <span class="choice-icon" aria-hidden="true">◇</span>
+                            <strong>Padrinhos</strong>
+                            <small>Organize casais ou padrinhos e madrinhas que entrarão individualmente.</small>
+                        </button>
+                        <button class="choice-card" type="button" role="radio" aria-checked="false" data-category="family">
+                            <span class="choice-icon" aria-hidden="true">⌂</span>
+                            <strong>Família</strong>
+                            <small>Crie uma família e adicione todos os seus integrantes.</small>
+                        </button>
+                        <button class="choice-card" type="button" role="radio" aria-checked="false" data-category="individual_group">
+                            <span class="choice-icon" aria-hidden="true">○</span>
+                            <strong>Convidado avulso</strong>
+                            <small>Adicione uma pessoa e informe de onde vocês a conhecem.</small>
+                        </button>
+                        <button class="choice-card" type="button" role="radio" aria-checked="false" data-category="couples">
+                            <span class="choice-icon" aria-hidden="true">∞</span>
+                            <strong>Casal</strong>
+                            <small>Adicione duas pessoas como um casal.</small>
+                        </button>
+                    </div>
+                </section>
+
+                <section class="wizard-step" data-wizard-step="2" hidden aria-labelledby="details-step-title">
+                    <h3 class="sr-only" id="details-step-title">Adicionar os nomes</h3>
+                    <div id="wizard-fields"></div>
+                </section>
+
+                <section class="wizard-step" data-wizard-step="3" hidden aria-labelledby="review-step-title">
+                    <h3 class="sr-only" id="review-step-title">Revisar os convidados</h3>
+                    <div class="review-card" id="guest-review" tabindex="-1"></div>
+                </section>
+            </div>
+
+            <footer class="wizard-actions">
+                <button class="button button-text" id="cancel-guest-wizard" type="button">Cancelar</button>
+                <div>
+                    <button class="button button-ghost" id="wizard-back" type="button" hidden>Voltar</button>
+                    <button class="button button-primary" id="wizard-next" type="button" disabled>Continuar</button>
+                </div>
+            </footer>
+        </article>
+    </dialog>
+
+    <dialog class="guest-details-dialog" id="guest-details-dialog" aria-labelledby="guest-details-title">
+        <article>
+            <header class="details-header">
+                <div>
+                    <p class="eyebrow" id="guest-details-category"></p>
+                    <h2 id="guest-details-title"></h2>
+                    <p id="guest-details-summary"></p>
+                </div>
+                <button class="icon-button" id="close-guest-details" type="button" aria-label="Fechar detalhes">×</button>
+            </header>
+            <div class="details-content" id="guest-details-content"></div>
+            <footer class="details-actions">
+                <button class="button button-danger-ghost" id="details-delete" type="button">Excluir</button>
+                <div>
+                    <button class="button button-ghost" id="details-toggle-closed" type="button"></button>
+                    <button class="button button-primary" id="details-edit" type="button">Editar grupo</button>
+                </div>
+            </footer>
+        </article>
+    </dialog>
+
+    <dialog class="complete-guest-list-dialog" id="complete-guest-list-dialog" aria-labelledby="complete-list-title">
+        <article>
+            <header class="complete-list-header">
+                <div>
+                    <p class="eyebrow">Visão geral</p>
+                    <h2 id="complete-list-title">Lista completa de convidados</h2>
+                    <p id="complete-list-summary"></p>
+                </div>
+                <button class="icon-button" id="close-complete-guest-list" type="button" aria-label="Fechar lista completa">×</button>
+            </header>
+            <div class="complete-list-body">
+                <section class="complete-list-stats" id="complete-list-stats" aria-label="Resumo da lista completa"></section>
+                <label class="search-box complete-list-search" for="complete-list-search">
+                    <span aria-hidden="true">⌕</span>
+                    <input id="complete-list-search" type="search" placeholder="Buscar nesta lista" autocomplete="off">
+                </label>
+                <p class="complete-list-results" id="complete-list-results" aria-live="polite"></p>
+                <div class="complete-list-content" id="complete-list-content"></div>
+            </div>
+        </article>
+    </dialog>
+
+    <dialog class="confirm-dialog" id="guest-confirm-dialog" aria-labelledby="confirm-title">
+        <article>
+            <header>
+                <span class="confirm-symbol" aria-hidden="true">?</span>
+                <div><p class="eyebrow">Só para confirmar</p><h2 id="confirm-title"></h2></div>
+            </header>
+            <p id="confirm-message"></p>
+            <p class="confirm-detail" id="confirm-detail"></p>
+            <footer>
+                <button class="button button-ghost" id="confirm-cancel" type="button">Cancelar</button>
+                <button class="button button-danger" id="confirm-accept" type="button"></button>
+            </footer>
+        </article>
+    </dialog>
+
+    <section class="print-guest-list" id="print-guest-list" aria-hidden="true"></section>
 </body>
 </html>
