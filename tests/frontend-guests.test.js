@@ -8,6 +8,7 @@ const projectRoot = path.resolve(__dirname, "..");
 const guestSource = fs.readFileSync(path.join(projectRoot, "pages", "convidados", "main.js"), "utf8");
 const guestHtml = fs.readFileSync(path.join(projectRoot, "pages", "convidados", "index.html"), "utf8");
 const guestCss = fs.readFileSync(path.join(projectRoot, "pages", "convidados", "style.css"), "utf8");
+const guestDocumentation = fs.readFileSync(path.join(projectRoot, "DOCUMENTACAO-CONVIDADOS.md"), "utf8");
 const guestLogicSource = guestSource.slice(0, guestSource.indexOf("const guestListElement"));
 
 function loadGuestLogic() {
@@ -46,11 +47,11 @@ test("normaliza convidados antigos por grupo sem perder nomes ou IDs", () => {
     assert.equal(groups[0].category, "individual_group");
     assert.equal(groups[0].name, "Igreja");
     assert.deepEqual(groups[0].members, [
-        { id: "old-1", name: "Ana Silva" },
-        { id: "old-2", name: "Bruno" }
+        { id: "old-1", name: "Ana Silva", isChild: false },
+        { id: "old-2", name: "Bruno", isChild: false }
     ]);
     assert.equal(Object.hasOwn(groups[0], "status"), false);
-    assert.deepEqual(groups[1].members, [{ id: "old-3", name: "Carla" }]);
+    assert.deepEqual(groups[1].members, [{ id: "old-3", name: "Carla", isChild: false }]);
 });
 
 test("conta pessoas reais em famílias, casais e padrinhos", () => {
@@ -117,7 +118,186 @@ test("normaliza família antiga preservando IDs, fechamento e capitalização do
     assert.equal(family.id, "family-old");
     assert.equal(family.name, "Família silva");
     assert.equal(family.isClosed, true);
-    assert.deepEqual(family.members, [{ id: "member-old", name: "Eduardo silva" }]);
+    assert.deepEqual(family.members, [{ id: "member-old", name: "Eduardo silva", isChild: false }]);
+});
+
+test("normaliza casal antigo como dois adultos e ignora classificações infantis incorretas", () => {
+    const context = loadGuestLogic();
+    context.oldCouple = {
+        id: "pair-old",
+        firstPersonName: "João",
+        secondPersonName: "Maria",
+        firstPersonIsChild: true,
+        secondPersonIsChild: true
+    };
+
+    const couple = read(context, "normalizeCouple(oldCouple)");
+    assert.deepEqual(couple, {
+        id: "pair-old",
+        firstPerson: { id: "pair-old-first", name: "João" },
+        secondPerson: { id: "pair-old-second", name: "Maria" },
+        children: []
+    });
+});
+
+test("normaliza crianças vinculadas ao casal com IDs próprios e isChild verdadeiro", () => {
+    const context = loadGuestLogic();
+    context.coupleWithChildren = {
+        id: "pair-children",
+        firstPerson: { id: "adult-1", name: " João ", isChild: true },
+        secondPerson: { id: "adult-2", name: " Maria ", isChild: true },
+        children: [{ id: "child-1", name: " Pedro ", isChild: false }, { id: "child-2", name: "Ana" }, { id: "empty", name: " " }]
+    };
+
+    const couple = read(context, "normalizeCouple(coupleWithChildren)");
+    assert.deepEqual(couple, {
+        id: "pair-children",
+        firstPerson: { id: "adult-1", name: "João" },
+        secondPerson: { id: "adult-2", name: "Maria" },
+        children: [
+            { id: "child-1", name: "Pedro", isChild: true },
+            { id: "child-2", name: "Ana", isChild: true }
+        ]
+    });
+});
+
+test("grupo Casais preserva fechamento e IDs de adultos, casal e crianças", () => {
+    const context = loadGuestLogic();
+    context.closedCouplesGroup = {
+        schemaVersion: 3,
+        id: "couples-group",
+        category: "couples",
+        name: "Casais",
+        isClosed: true,
+        couples: [{
+            id: "pair-1",
+            firstPerson: { id: "adult-1", name: "João", isChild: true },
+            secondPerson: { id: "adult-2", name: "Maria", isChild: true },
+            children: [{ id: "child-1", name: "Pedro", isChild: false }]
+        }]
+    };
+
+    const group = read(context, "normalizeStructuredGroup(closedCouplesGroup)");
+    assert.equal(group.id, "couples-group");
+    assert.equal(group.isClosed, true);
+    assert.equal(group.couples[0].id, "pair-1");
+    assert.equal(group.couples[0].firstPerson.id, "adult-1");
+    assert.equal(group.couples[0].secondPerson.id, "adult-2");
+    assert.equal(group.couples[0].children[0].id, "child-1");
+    assert.equal(Object.hasOwn(group.couples[0].firstPerson, "isChild"), false);
+    assert.equal(group.couples[0].children[0].isChild, true);
+});
+
+test("grupo antigo de padrinhos vira sistema único sem perder ID, pessoas ou fechamento", () => {
+    const context = loadGuestLogic();
+    context.oldGodparents = [{
+        schemaVersion: 2,
+        id: "godparents-old",
+        category: "godparents",
+        name: "Padrinhos",
+        isClosed: true,
+        couples: [{ id: "pair-1", firstPersonName: "Ana", secondPersonName: "Bia" }],
+        individuals: [{ id: "single-1", name: "Carlos" }]
+    }, {
+        schemaVersion: 2,
+        id: "godparents-duplicate",
+        category: "godparents",
+        name: "Outro título",
+        couples: [{ id: "pair-1", firstPersonName: "Ana", secondPersonName: "Bia" }],
+        individuals: [{ id: "single-2", name: "Dora", isChild: true }]
+    }];
+
+    const groups = read(context, "normalizeGuestGroups(oldGodparents)");
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].id, "godparents-old");
+    assert.equal(groups[0].name, "Padrinhos & Madrinhas");
+    assert.equal(groups[0].category, "godparents");
+    assert.equal(groups[0].isSystem, true);
+    assert.equal(groups[0].systemKey, "godparents");
+    assert.equal(groups[0].sortOrder, 0);
+    assert.equal(groups[0].isClosed, true);
+    assert.deepEqual(groups[0].couples.map(item => item.id), ["pair-1"]);
+    assert.deepEqual(groups[0].individuals.map(item => item.id), ["single-1", "single-2"]);
+    assert.equal(Object.hasOwn(groups[0].individuals[1], "isChild"), false);
+    assert.equal(Object.hasOwn(groups[0].couples[0], "children"), false);
+    assert.equal(Object.hasOwn(groups[0].couples[0].firstPerson, "isChild"), false);
+});
+
+test("ordenação fixa Padrinhos & Madrinhas sem ignorar busca ou filtros", () => {
+    const context = loadGuestLogic();
+    context.groupsToSort = [{ id: "family", category: "family", name: "Família Silva", isClosed: false, members: [{ name: "Ana" }] }, {
+        id: "godparents", category: "godparents", name: "Padrinhos & Madrinhas", systemKey: "godparents", isClosed: true, couples: [], individuals: [{ name: "Bia" }]
+    }, {
+        id: "friends", category: "individual_group", name: "Amigos", isClosed: false, members: [{ name: "Caio" }]
+    }, {
+        id: "closed-family", category: "family", name: "Família Souza", isClosed: true, members: [{ name: "Dora" }]
+    }];
+
+    assert.deepEqual(read(context, "sortGuestGroups(groupsToSort).map(group => group.id)"), ["godparents", "family", "friends", "closed-family"]);
+    assert.deepEqual(read(context, "sortGuestGroups(filterGuestGroups(groupsToSort, '', 'open', 'all')).map(group => group.id)"), ["family", "friends"]);
+    assert.deepEqual(read(context, "sortGuestGroups(filterGuestGroups(groupsToSort, '', 'closed', 'all')).map(group => group.id)"), ["godparents", "closed-family"]);
+    assert.deepEqual(read(context, "sortGuestGroups(filterGuestGroups(groupsToSort, 'Bia', 'all', 'all')).map(group => group.id)"), ["godparents"]);
+});
+
+test("conta pessoas, crianças e adultos em todas as categorias", () => {
+    const context = loadGuestLogic();
+    context.classifiedGroups = [{
+        category: "family",
+        members: [{ isChild: true }, { isChild: false }, {}]
+    }, {
+        category: "couples",
+        couples: [{ firstPerson: {}, secondPerson: {}, children: [{ isChild: true }, { isChild: true }] }]
+    }, {
+        category: "godparents",
+        couples: [{ firstPerson: { isChild: true }, secondPerson: { isChild: true } }],
+        individuals: [{ isChild: false }]
+    }];
+
+    assert.equal(vm.runInContext("countAllPeople(classifiedGroups)", context), 10);
+    assert.equal(vm.runInContext("countAllChildren(classifiedGroups)", context), 3);
+    assert.equal(vm.runInContext("countAllAdults(classifiedGroups)", context), 7);
+    assert.equal(vm.runInContext("countChildrenInGroup(classifiedGroups[0])", context), 1);
+    assert.equal(vm.runInContext("countAdultsInGroup(classifiedGroups[0])", context), 2);
+    assert.equal(vm.runInContext("countChildrenInGroup(classifiedGroups[2])", context), 0);
+});
+
+test("casal soma dois adultos mais cada criança vinculada", () => {
+    const context = loadGuestLogic();
+    context.withoutChildren = { category: "couples", couples: [{ children: [] }] };
+    context.withOneChild = { category: "couples", couples: [{ children: [{ id: "c1" }] }] };
+    context.withTwoChildren = { category: "couples", couples: [{ children: [{ id: "c1" }, { id: "c2" }] }] };
+
+    assert.equal(vm.runInContext("countGroupPeople(withoutChildren)", context), 2);
+    assert.equal(vm.runInContext("countGroupPeople(withOneChild)", context), 3);
+    assert.equal(vm.runInContext("countGroupPeople(withTwoChildren)", context), 4);
+    assert.equal(vm.runInContext("countAdultsInGroup(withTwoChildren)", context), 2);
+    assert.equal(vm.runInContext("countChildrenInGroup(withTwoChildren)", context), 2);
+});
+
+test("adiciona, edita e remove crianças sem duplicar ou trocar IDs", () => {
+    const context = loadGuestLogic();
+    context.draftCouple = { id: "pair-1", firstPerson: { name: "João" }, secondPerson: { name: "Maria" }, children: [] };
+
+    assert.equal(vm.runInContext("saveCoupleChild(draftCouple, null, '   ')", context), null);
+    vm.runInContext("saveCoupleChild(draftCouple, null, ' Pedro '); saveCoupleChild(draftCouple, null, 'Ana')", context);
+    const beforeEdit = read(context, "draftCouple.children");
+    assert.equal(beforeEdit.length, 2);
+    assert.equal(beforeEdit[0].name, "Pedro");
+    assert.equal(beforeEdit[0].isChild, true);
+
+    context.preservedChildId = beforeEdit[0].id;
+    vm.runInContext("saveCoupleChild(draftCouple, preservedChildId, 'Pedro Henrique')", context);
+    const afterEdit = read(context, "draftCouple.children");
+    assert.equal(afterEdit.length, 2);
+    assert.equal(afterEdit[0].id, beforeEdit[0].id);
+    assert.equal(afterEdit[0].name, "Pedro Henrique");
+
+    context.removedChildId = afterEdit[1].id;
+    assert.equal(vm.runInContext("removeCoupleChildFromCouple(draftCouple, removedChildId)", context), true);
+    assert.equal(vm.runInContext("removeCoupleChildFromCouple(draftCouple, removedChildId)", context), false);
+    assert.deepEqual(read(context, "draftCouple.children.map(child => child.id)"), [beforeEdit[0].id]);
+    assert.equal(vm.runInContext("removeCoupleChildFromCouple(draftCouple, preservedChildId)", context), true);
+    assert.deepEqual(read(context, "draftCouple.children"), []);
 });
 
 test("foco programático mantém campos vazios e leva o cursor ao fim de valores editados", () => {
@@ -168,7 +348,7 @@ test("busca encontra grupo, origem, integrante e nomes de casal", () => {
         relationshipGroup: "",
         isClosed: true,
         members: [],
-        couples: [{ firstPersonName: "João", secondPersonName: "Lívia" }],
+        couples: [{ firstPersonName: "João", secondPersonName: "Lívia", children: [{ name: "Pedro" }] }],
         individuals: []
     }, {
         category: "individual_group",
@@ -183,6 +363,7 @@ test("busca encontra grupo, origem, integrante e nomes de casal", () => {
     assert.deepEqual(read(context, "filterGuestGroups(groups, 'marcia', 'all', 'all').map(group => group.name)"), ["Família Silva"]);
     assert.deepEqual(read(context, "filterGuestGroups(groups, 'familia', 'all', 'all').map(group => group.name)"), ["Família Silva"]);
     assert.deepEqual(read(context, "filterGuestGroups(groups, 'livia', 'all', 'all').map(group => group.name)"), ["Casais"]);
+    assert.deepEqual(read(context, "filterGuestGroups(groups, 'pedro', 'all', 'all').map(group => group.name)"), ["Casais"]);
     assert.deepEqual(read(context, "filterGuestGroups(groups, 'igreja', 'open', 'individual_group').map(group => group.name)"), ["Igreja"]);
     assert.deepEqual(read(context, "filterGuestGroups(groups, '', 'closed', 'all').map(group => group.name)"), ["Casais"]);
 });
@@ -227,6 +408,8 @@ test("interface remove presença e oferece fluxo, detalhes, filtros e confirmaç
     assert.match(guestHtml, /id="guest-confirm-dialog"/);
     assert.match(guestHtml, /Exportar em PDF/);
     assert.match(guestHtml, /Todas as categorias/);
+    assert.match(guestHtml, /Padrinhos &amp; Madrinhas/);
+    assert.doesNotMatch(guestHtml, /Padrinhos\/Madrinhas/);
     assert.doesNotMatch(guestHtml, /Aguardando|Confirmado|Recusado|guest-status|filtro por status/i);
     assert.doesNotMatch(guestSource, /window\.confirm/);
 });
@@ -247,12 +430,86 @@ test("família usa prefixo fixo, complemento editável e foco estável", () => {
 test("lista completa usa a contagem central, mostra nomes e preserva grupos fechados", () => {
     assert.match(guestSource, /function renderCompleteGuestList\(\)/);
     assert.match(guestSource, /const totalPeople = countAllPeople\(state\.guests\)/);
+    assert.match(guestSource, /const totalChildren = countAllChildren\(state\.guests\)/);
+    assert.match(guestSource, /const totalAdults = countAllAdults\(state\.guests\)/);
     assert.match(guestSource, /visibleGroups\.map\(renderCompleteListGroup\)/);
     assert.match(guestSource, /getDetailsContent\(group\)/);
     assert.match(guestSource, /group\.isClosed \? '<span class="closed-badge/);
     assert.match(guestSource, /data-complete-action="view"/);
     assert.match(guestSource, /data-complete-action="edit"/);
     assert.match(guestCss, /\.complete-guest-list-dialog/);
+});
+
+test("opção Criança fica em família e avulsos, não nos adultos do casal ou padrinhos", () => {
+    assert.match(guestSource, /data-buffer-boolean="personIsChild"/);
+    assert.match(guestSource, /family-member-child/);
+    assert.match(guestSource, /individual-member-child/);
+    assert.doesNotMatch(guestSource, /firstPersonIsChild|secondPersonIsChild|coupleFirstIsChild|coupleSecondIsChild/);
+    assert.doesNotMatch(guestSource, /godparent-first-child|godparent-second-child|godparent-individual-child/);
+    assert.match(guestSource, /person\.isChild = Boolean\(wizardState\.buffer\.personIsChild\)/);
+    assert.match(guestCss, /\.child-option/);
+    assert.match(guestCss, /\.child-badge/);
+});
+
+test("casal oferece seção acessível para uma ou mais crianças", () => {
+    assert.match(guestSource, /class="couple-children-toggle"/);
+    assert.match(guestSource, /type="button" aria-expanded="\$\{expanded\}" aria-controls="couple-children-panel"/);
+    assert.match(guestSource, /"Tem criança\?"/);
+    assert.match(guestSource, /Crianças que acompanham o casal/);
+    assert.match(guestSource, /for="couple-child-name"/);
+    assert.match(guestSource, /data-buffer-field="childName"/);
+    assert.match(guestSource, /data-couple-children-action="save"/);
+    assert.match(guestSource, /data-child-action="edit"/);
+    assert.match(guestSource, /data-child-action="remove"/);
+    assert.match(guestSource, /aria-live="polite"/);
+    assert.match(guestSource, /function addOrUpdateCoupleChild\(\)/);
+    assert.match(guestSource, /function editCoupleChild\(childId\)/);
+    assert.match(guestSource, /function removeCoupleChild\(childId\)/);
+    assert.match(guestSource, /saveCoupleChild\(couple, wizardState\.editingChildId, name\)/);
+    assert.match(guestSource, /data-couple-action="select"/);
+    assert.match(guestSource, /function selectDraftCouple\(coupleId\)/);
+    assert.match(guestSource, /wizardState\.activeCoupleId = couple\.id/);
+    assert.match(guestCss, /\.couple-children-toggle:focus-visible/);
+    assert.match(guestCss, /\.couple-picker-button/);
+    assert.match(guestCss, /\.couple-child-builder/);
+});
+
+test("cartões, detalhes, lista completa e PDF exibem crianças sem alterar o total", () => {
+    assert.match(guestSource, /function countChildrenInGroup\(group\)/);
+    assert.match(guestSource, /class="card-children"/);
+    assert.match(guestSource, /renderPersonWithChildBadge/);
+    assert.match(guestSource, /formatPersonForPrint/);
+    assert.match(guestSource, /renderCouplePresentation\(couple, true\)/);
+    assert.match(guestSource, /class="print-couple-children"/);
+    assert.match(guestSource, /couple\.children\.map\(child/);
+    assert.match(guestSource, /Adultos: \$\{countAllAdults\(state\.guests\)\}/);
+    assert.match(guestSource, /Crianças: \$\{countAllChildren\(state\.guests\)\}/);
+    assert.match(guestSource, /const sortedGroups = sortGuestGroups\(state\.guests\)/);
+});
+
+test("modelo local prepara grupo de sistema e pessoas para o banco futuro", () => {
+    assert.match(guestSource, /isSystem: isGodparentsGroup \|\| Boolean\(group\.isSystem\)/);
+    assert.match(guestSource, /systemKey: isGodparentsGroup \? "godparents" : null/);
+    assert.match(guestSource, /sortOrder: isGodparentsGroup \? 0/);
+    assert.match(guestSource, /firstPerson: normalizeAdultPerson/);
+    assert.match(guestSource, /secondPerson: normalizeAdultPerson/);
+    assert.match(guestSource, /normalized\.children =/);
+    assert.match(guestSource, /isChild: true/);
+    assert.match(guestSource, /function findGuestSystemGroup\(groups, systemKey\)/);
+});
+
+test("documentação descreve o modelo local e o mapeamento futuro sem executar SQL", () => {
+    assert.match(guestDocumentation, /Padrinhos & Madrinhas/);
+    assert.match(guestDocumentation, /`isChild`/);
+    assert.match(guestDocumentation, /`systemKey`/);
+    assert.match(guestDocumentation, /## 16\. Modelo futuro: `guest_groups`/);
+    assert.match(guestDocumentation, /## 17\. Modelo futuro: `guest_members`/);
+    assert.match(guestDocumentation, /`pair_id`/);
+    assert.match(guestDocumentation, /`household_id`/);
+    assert.match(guestDocumentation, /`couple_child`/);
+    assert.doesNotMatch(guestDocumentation, /`child_couple`/);
+    assert.match(guestDocumentation, /RLS futura/);
+    assert.doesNotMatch(guestDocumentation, /CREATE\s+TABLE|ALTER\s+TABLE|CREATE\s+POLICY/i);
 });
 
 test("cartão inteiro usa botão nativo para clique, Enter e Espaço sem conflitar com ações", () => {
