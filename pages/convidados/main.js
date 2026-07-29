@@ -1,6 +1,6 @@
-const GUEST_SCHEMA_VERSION = 2;
+const GUEST_SCHEMA_VERSION = 4;
 const GUEST_CATEGORIES = Object.freeze({
-    godparents: { label: "Padrinhos", singular: "Padrinhos" },
+    godparents: { label: "Padrinhos & Madrinhas", singular: "Padrinhos & Madrinhas" },
     family: { label: "Família", singular: "Família" },
     individual_group: { label: "Grupo de avulsos", singular: "Convidado avulso" },
     couples: { label: "Casais", singular: "Casal" }
@@ -97,25 +97,59 @@ function safeGuestId(value, prefix) {
 
 function normalizePerson(person, prefix = "person") {
     if (typeof person === "string") {
-        return { id: makeGuestId(prefix), name: cleanGuestText(person) };
+        return { id: makeGuestId(prefix), name: cleanGuestText(person), isChild: false };
     }
 
     return {
         id: safeGuestId(person?.id, prefix),
-        name: cleanGuestText(person?.name)
+        name: cleanGuestText(person?.name),
+        isChild: person?.isChild === true
     };
 }
 
-function normalizeCouple(couple, prefix = "couple") {
+function normalizeAdultPerson(person, id, prefix = "pair-person") {
+    const value = typeof person === "string" ? { name: person } : person || {};
     return {
-        id: safeGuestId(couple?.id, prefix),
-        firstPersonName: cleanGuestText(couple?.firstPersonName ?? couple?.firstName),
-        secondPersonName: cleanGuestText(couple?.secondPersonName ?? couple?.secondName)
+        id: safeGuestId(value.id || id, prefix),
+        name: cleanGuestText(value.name)
     };
+}
+
+function normalizeCoupleChild(child, coupleId) {
+    const value = typeof child === "string" ? { name: child } : child || {};
+    return {
+        id: safeGuestId(value.id, `${coupleId}-child`),
+        name: cleanGuestText(value.name),
+        isChild: true
+    };
+}
+
+function normalizeCouple(couple, prefix = "couple", includeChildren = true) {
+    const id = safeGuestId(couple?.id, prefix);
+    const firstPersonValue = couple?.firstPerson || {
+        id: couple?.firstPersonId || `${id}-first`,
+        name: couple?.firstPersonName ?? couple?.firstName
+    };
+    const secondPersonValue = couple?.secondPerson || {
+        id: couple?.secondPersonId || `${id}-second`,
+        name: couple?.secondPersonName ?? couple?.secondName
+    };
+    const normalized = {
+        id,
+        firstPerson: normalizeAdultPerson(firstPersonValue, `${id}-first`),
+        secondPerson: normalizeAdultPerson(secondPersonValue, `${id}-second`)
+    };
+    if (includeChildren) {
+        normalized.children = (Array.isArray(couple?.children) ? couple.children : [])
+            .map(child => normalizeCoupleChild(child, id))
+            .filter(child => child.name);
+    }
+    return normalized;
 }
 
 function isStructuredGuestGroup(item) {
-    return Boolean(item && GUEST_CATEGORIES[item.category] && (
+    const hasKnownIdentity = Boolean(GUEST_CATEGORIES[item?.category] || item?.systemKey === "godparents");
+    return Boolean(item && hasKnownIdentity && (
         item.schemaVersion === GUEST_SCHEMA_VERSION ||
         Array.isArray(item.members) ||
         Array.isArray(item.couples) ||
@@ -124,7 +158,10 @@ function isStructuredGuestGroup(item) {
 }
 
 function normalizeStructuredGroup(group) {
-    const category = GUEST_CATEGORIES[group.category] ? group.category : "individual_group";
+    const category = group?.systemKey === "godparents"
+        ? "godparents"
+        : GUEST_CATEGORIES[group.category] ? group.category : "individual_group";
+    const isGodparentsGroup = category === "godparents";
     const normalized = {
         schemaVersion: GUEST_SCHEMA_VERSION,
         id: safeGuestId(group.id, "group"),
@@ -132,6 +169,9 @@ function normalizeStructuredGroup(group) {
         name: cleanGuestText(group.name) || GUEST_CATEGORIES[category].label,
         relationshipGroup: cleanGuestText(group.relationshipGroup),
         isClosed: Boolean(group.isClosed),
+        isSystem: isGodparentsGroup || Boolean(group.isSystem),
+        systemKey: isGodparentsGroup ? "godparents" : null,
+        sortOrder: isGodparentsGroup ? 0 : Number.isFinite(group.sortOrder) ? group.sortOrder : null,
         members: [],
         couples: [],
         individuals: [],
@@ -142,13 +182,13 @@ function normalizeStructuredGroup(group) {
         .map(person => normalizePerson(person, "member"))
         .filter(person => person.name);
     normalized.couples = (Array.isArray(group.couples) ? group.couples : [])
-        .map(couple => normalizeCouple(couple))
-        .filter(couple => couple.firstPersonName && couple.secondPersonName);
+        .map(couple => normalizeCouple(couple, "couple", category === "couples"))
+        .filter(couple => couple.firstPerson.name && couple.secondPerson.name);
     normalized.individuals = (Array.isArray(group.individuals) ? group.individuals : [])
-        .map(person => normalizePerson(person, "godparent"))
+        .map(person => normalizeAdultPerson(person, person?.id, "godparent"))
         .filter(person => person.name);
 
-    if (category === "godparents") normalized.name = "Padrinhos";
+    if (category === "godparents") normalized.name = "Padrinhos & Madrinhas";
     if (category === "couples") normalized.name = "Casais";
     if (category === "family") {
         normalized.name = buildFamilyDisplayName(normalized.name);
@@ -170,11 +210,23 @@ function createLegacyGroupId(groupName, firstGuestId) {
     return `legacy-group-${slug}-${cleanGuestText(firstGuestId) || "local"}`;
 }
 
+function appendUniqueGuestEntries(target, entries) {
+    const existingIds = new Set(target.map(item => item.id));
+    entries.forEach(item => {
+        if (!existingIds.has(item.id)) {
+            target.push(item);
+            existingIds.add(item.id);
+        }
+    });
+}
+
 function mergeCompatibleGroups(groups) {
     const merged = [];
 
     groups.forEach(group => {
-        const mergeKey = group.category === "individual_group"
+        const mergeKey = group.systemKey
+            ? `system:${group.systemKey}`
+            : group.category === "individual_group"
             ? `${group.category}:${comparableGuestText(group.name)}`
             : ["godparents", "couples"].includes(group.category)
                 ? group.category
@@ -188,10 +240,12 @@ function mergeCompatibleGroups(groups) {
             return;
         }
 
-        existing.members.push(...group.members);
-        existing.couples.push(...group.couples);
-        existing.individuals.push(...group.individuals);
+        appendUniqueGuestEntries(existing.members, group.members);
+        appendUniqueGuestEntries(existing.couples, group.couples);
+        appendUniqueGuestEntries(existing.individuals, group.individuals);
         existing.isClosed = existing.isClosed || group.isClosed;
+        existing.isSystem = existing.isSystem || group.isSystem;
+        existing.systemKey = existing.systemKey || group.systemKey;
     });
 
     return merged.map(item => item.group);
@@ -220,6 +274,9 @@ function normalizeGuestGroups(rawGuests) {
                 name: relationshipGroup,
                 relationshipGroup,
                 isClosed: false,
+                isSystem: false,
+                systemKey: null,
+                sortOrder: null,
                 members: [],
                 couples: [],
                 individuals: [],
@@ -229,7 +286,8 @@ function normalizeGuestGroups(rawGuests) {
 
         legacyGroups.get(key).members.push({
             id: safeGuestId(item?.id, "legacy-person"),
-            name
+            name,
+            isChild: item?.isChild === true
         });
     });
 
@@ -237,17 +295,116 @@ function normalizeGuestGroups(rawGuests) {
     return mergeCompatibleGroups(groups);
 }
 
+function findGuestSystemGroup(groups, systemKey) {
+    return (Array.isArray(groups) ? groups : []).find(group =>
+        group.systemKey === systemKey || (systemKey === "godparents" && group.category === "godparents")
+    );
+}
+
+function sortGuestGroups(groups) {
+    return (Array.isArray(groups) ? groups : [])
+        .map((group, index) => ({ group, index }))
+        .sort((left, right) => {
+            const leftPriority = left.group.systemKey === "godparents" || left.group.category === "godparents" ? 0 : 1;
+            const rightPriority = right.group.systemKey === "godparents" || right.group.category === "godparents" ? 0 : 1;
+            if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+
+            const leftOrder = Number.isFinite(left.group.sortOrder) ? left.group.sortOrder : null;
+            const rightOrder = Number.isFinite(right.group.sortOrder) ? right.group.sortOrder : null;
+            if (leftOrder !== null && rightOrder !== null && leftOrder !== rightOrder) return leftOrder - rightOrder;
+            return left.index - right.index;
+        })
+        .map(item => item.group);
+}
+
+function getPeopleInGroup(group) {
+    if (!group) return [];
+    if (group.category === "godparents") {
+        return [
+            ...(group.couples || []).flatMap(couple => [
+                couple.firstPerson || { name: couple.firstPersonName },
+                couple.secondPerson || { name: couple.secondPersonName }
+            ]),
+            ...(group.individuals || [])
+        ];
+    }
+    if (group.category === "couples") {
+        return (group.couples || []).flatMap(couple => [
+            couple.firstPerson || { name: couple.firstPersonName },
+            couple.secondPerson || { name: couple.secondPersonName },
+            ...(couple.children || [])
+        ]);
+    }
+    return group.members || [];
+}
+
 function countGroupPeople(group) {
     if (!group) return 0;
     if (group.category === "godparents") {
         return (group.couples?.length || 0) * 2 + (group.individuals?.length || 0);
     }
-    if (group.category === "couples") return (group.couples?.length || 0) * 2;
+    if (group.category === "couples") {
+        return (group.couples || []).reduce((total, couple) => total + 2 + (couple.children?.length || 0), 0);
+    }
     return group.members?.length || 0;
+}
+
+function countChildrenInGroup(group) {
+    if (group?.category === "godparents") return 0;
+    if (group?.category === "couples") {
+        return (group.couples || []).reduce((total, couple) => total + (couple.children?.length || 0), 0);
+    }
+    return (group?.members || []).filter(person => person?.isChild === true).length;
+}
+
+function countAdultsInGroup(group) {
+    return countGroupPeople(group) - countChildrenInGroup(group);
+}
+
+function countCouplesInGroup(group) {
+    return ["godparents", "couples"].includes(group?.category) ? group.couples?.length || 0 : 0;
+}
+
+function countIndividualsInGroup(group) {
+    if (group?.category === "godparents") return group.individuals?.length || 0;
+    return group?.members?.length || 0;
 }
 
 function countAllPeople(groups) {
     return (Array.isArray(groups) ? groups : []).reduce((total, group) => total + countGroupPeople(group), 0);
+}
+
+function countAllChildren(groups) {
+    return (Array.isArray(groups) ? groups : []).reduce((total, group) => total + countChildrenInGroup(group), 0);
+}
+
+function countAllAdults(groups) {
+    return countAllPeople(groups) - countAllChildren(groups);
+}
+
+function saveCoupleChild(couple, childId, value) {
+    const name = cleanGuestText(value);
+    if (!couple || !name) return null;
+    couple.children ||= [];
+
+    if (childId) {
+        const child = couple.children.find(item => item.id === childId);
+        if (!child) return null;
+        child.name = name;
+        child.isChild = true;
+        return child;
+    }
+
+    const child = { id: makeGuestId("couple-child"), name, isChild: true };
+    couple.children.push(child);
+    return child;
+}
+
+function removeCoupleChildFromCouple(couple, childId) {
+    if (!couple || !Array.isArray(couple.children)) return false;
+    const originalLength = couple.children.length;
+    couple.children = couple.children.filter(child => child.id !== childId);
+    return couple.children.length !== originalLength;
 }
 
 function pluralizeGuest(count, singular, plural) {
@@ -258,7 +415,11 @@ function getGroupSearchText(group) {
     const names = [group.name, group.relationshipGroup, GUEST_CATEGORIES[group.category]?.label];
     group.members?.forEach(member => names.push(member.name));
     group.individuals?.forEach(member => names.push(member.name));
-    group.couples?.forEach(couple => names.push(couple.firstPersonName, couple.secondPersonName));
+    group.couples?.forEach(couple => names.push(
+        couple.firstPerson?.name ?? couple.firstPersonName,
+        couple.secondPerson?.name ?? couple.secondPersonName,
+        ...(couple.children || []).map(child => child.name)
+    ));
     return searchableGuestText(names.join(" "));
 }
 
@@ -274,10 +435,10 @@ function filterGuestGroups(groups, search, stateFilter, categoryFilter) {
 
 function getGroupMeta(group) {
     if (group.category === "godparents") {
-        return `${pluralizeGuest(group.couples.length, "casal", "casais")} · ${pluralizeGuest(group.individuals.length, "avulso", "avulsos")}`;
+        return `${pluralizeGuest(countCouplesInGroup(group), "casal", "casais")} · ${pluralizeGuest(countIndividualsInGroup(group), "avulso", "avulsos")}`;
     }
-    if (group.category === "couples") return pluralizeGuest(group.couples.length, "casal", "casais");
-    return pluralizeGuest(group.members.length, "integrante", "integrantes");
+    if (group.category === "couples") return pluralizeGuest(countCouplesInGroup(group), "casal", "casais");
+    return pluralizeGuest(countIndividualsInGroup(group), "integrante", "integrantes");
 }
 
 function createEmptyGuestDraft(category = "") {
@@ -288,6 +449,9 @@ function createEmptyGuestDraft(category = "") {
         name: category && category !== "family" ? GUEST_CATEGORIES[category].label : "",
         relationshipGroup: "",
         isClosed: false,
+        isSystem: category === "godparents",
+        systemKey: category === "godparents" ? "godparents" : null,
+        sortOrder: category === "godparents" ? 0 : null,
         members: [],
         couples: [],
         individuals: [],
@@ -336,15 +500,28 @@ function createWizardState() {
         dirty: false,
         builderMode: "couples",
         originChoice: "Amigos",
-        buffer: { personName: "", firstPersonName: "", secondPersonName: "" },
-        editingEntry: null
+        buffer: {
+            personName: "",
+            personIsChild: false,
+            firstPersonName: "",
+            secondPersonName: "",
+            childName: ""
+        },
+        editingEntry: null,
+        editingChildId: null,
+        coupleChildrenExpanded: false,
+        activeCoupleId: null
     };
 }
 
 function renderGuestSummary() {
     const totalPeople = countAllPeople(state.guests);
+    const totalChildren = countAllChildren(state.guests);
     const closed = state.guests.filter(group => group.isClosed).length;
     document.querySelector("#summary-people").textContent = totalPeople;
+    document.querySelector("#summary-children").textContent = totalChildren;
+    document.querySelector("#summary-children-item").hidden = totalChildren === 0;
+    document.querySelector("#summary-children-divider").hidden = totalChildren === 0;
     document.querySelector("#summary-groups").textContent = state.guests.length;
     document.querySelector("#summary-closed").textContent = closed;
     document.querySelector("#summary-open").textContent = state.guests.length - closed;
@@ -355,6 +532,7 @@ function renderGuestSummary() {
 
 function renderGuestCard(group) {
     const total = countGroupPeople(group);
+    const children = countChildrenInGroup(group);
     const safeId = escapeHtml(group.id);
     const closedState = group.isClosed
         ? `<span class="closed-badge"><span aria-hidden="true">✓</span> Fechado</span>`
@@ -369,6 +547,7 @@ function renderGuestCard(group) {
             </div>
             <h2 id="guest-card-${safeId}">${escapeHtml(group.name)}</h2>
             <p class="card-count">${pluralizeGuest(total, "pessoa", "pessoas")}</p>
+            ${children ? `<p class="card-children">${pluralizeGuest(children, "criança", "crianças")}</p>` : ""}
             <p class="card-meta">${escapeHtml(getGroupMeta(group))}</p>
             <div class="card-actions">
                 <button class="card-action primary" data-action="view-group" data-id="${safeId}" type="button">Ver integrantes</button>
@@ -380,12 +559,12 @@ function renderGuestCard(group) {
 }
 
 function renderGuests() {
-    const visibleGroups = filterGuestGroups(
+    const visibleGroups = sortGuestGroups(filterGuestGroups(
         state.guests,
         guestSearch.value,
         guestStateFilter.value,
         guestCategoryFilter.value
-    );
+    ));
     const hasFilters = Boolean(guestSearch.value.trim()) || guestStateFilter.value !== "all" || guestCategoryFilter.value !== "all";
 
     document.querySelector("#guest-results-meta").textContent = hasFilters
@@ -401,7 +580,7 @@ function renderGuests() {
         <div class="guest-empty">
             <span aria-hidden="true">♡</span>
             <h2>${hasFilters ? "Nenhum grupo por aqui" : "Uma lista feita de histórias"}</h2>
-            <p>${hasFilters ? "Tente outro nome ou ajuste os filtros para encontrar quem procura." : "Comece adicionando uma família, um casal, padrinhos ou alguém especial."}</p>
+            <p>${hasFilters ? "Tente outro nome ou ajuste os filtros para encontrar quem procura." : "Comece adicionando uma família, um casal, padrinhos e madrinhas ou alguém especial."}</p>
             ${hasFilters ? "" : '<button class="button button-primary" data-action="open-create" type="button">Adicionar primeiros convidados</button>'}
         </div>`;
 }
@@ -417,16 +596,42 @@ function categoryFieldsHeading(title, description) {
     return `<div class="details-intro"><h3>${title}</h3><p>${description}</p></div>`;
 }
 
-function renderMemberRows(items, type, formatter = item => item.name) {
+function renderChildOption(id, dataAttribute, checked, label = "Criança") {
+    return `<label class="child-option" for="${id}">
+        <input id="${id}" type="checkbox" ${dataAttribute} ${checked ? "checked" : ""}>
+        <span>${label}</span>
+    </label>`;
+}
+
+function renderPersonWithChildBadge(person) {
+    return `<span class="person-with-classification"><span>${escapeHtml(person.name)}</span>${person.isChild ? '<span class="child-badge">Criança</span>' : ""}</span>`;
+}
+
+function renderCouplePresentation(couple, showChildren = true) {
+    const children = Array.isArray(couple.children) ? couple.children : [];
+    return `<div class="couple-presentation">
+        <span class="couple-names">${escapeHtml(couple.firstPerson.name)} <span class="couple-separator">e</span> ${escapeHtml(couple.secondPerson.name)}</span>
+        ${showChildren && children.length ? `<div class="couple-children-summary"><strong>Crianças:</strong><ul>${children.map(child => `<li>${escapeHtml(child.name)}</li>`).join("")}</ul></div>` : ""}
+    </div>`;
+}
+
+function renderMemberRows(items, type) {
     if (!items.length) return '<p class="list-placeholder">Os nomes adicionados aparecerão aqui.</p>';
-    return `<div class="member-list">${items.map(item => `
+    return `<div class="member-list">${items.map(item => {
+        const content = type === "couples"
+            ? renderCouplePresentation(item, wizardState.draft.category === "couples")
+            : wizardState.draft.category === "godparents"
+                ? `<span>${escapeHtml(item.name)}</span>`
+                : renderPersonWithChildBadge(item);
+        return `
         <div class="member-row">
-            <span>${escapeHtml(formatter(item))}</span>
+            ${content}
             <div class="member-row-actions">
                 <button class="member-action" data-entry-action="edit" data-entry-type="${type}" data-entry-id="${escapeHtml(item.id)}" type="button">Editar</button>
                 <button class="member-action remove" data-entry-action="remove" data-entry-type="${type}" data-entry-id="${escapeHtml(item.id)}" type="button">Remover</button>
             </div>
-        </div>`).join("")}</div>`;
+        </div>`;
+    }).join("")}</div>`;
 }
 
 function renderFamilyFields() {
@@ -450,6 +655,7 @@ function renderFamilyFields() {
                         <label for="family-member-name">Nome da pessoa</label>
                         <input id="family-member-name" data-buffer-field="personName" value="${escapeHtml(wizardState.buffer.personName)}" placeholder="Ex.: Eduardo" autocomplete="off" aria-describedby="family-member-help">
                         <small class="field-help" id="family-member-help">O nome da família será acrescentado automaticamente.</small>
+                        ${renderChildOption("family-member-child", 'data-buffer-boolean="personIsChild"', wizardState.buffer.personIsChild)}
                     </div>
                     <button class="button button-ghost button-small" data-builder-action="add-person" data-entry-type="members" type="button">${editingPerson ? "Salvar integrante" : "+ Adicionar integrante"}</button>
                 </div>
@@ -484,6 +690,7 @@ function renderIndividualFields() {
                     <div class="wizard-field field-grow">
                         <label for="individual-name">Nome da pessoa</label>
                         <input id="individual-name" data-buffer-field="personName" value="${escapeHtml(wizardState.buffer.personName)}" placeholder="Ex.: Amanda Pereira" autocomplete="off">
+                        ${renderChildOption("individual-member-child", 'data-buffer-boolean="personIsChild"', wizardState.buffer.personIsChild)}
                     </div>
                     <button class="button button-ghost button-small" data-builder-action="add-person" data-entry-type="members" type="button">${editingPerson ? "Salvar pessoa" : "+ Adicionar pessoa"}</button>
                 </div>
@@ -495,33 +702,79 @@ function renderIndividualFields() {
 }
 
 function renderCoupleFields() {
-    const couple = wizardState.draft.couples[0] || { firstPersonName: "", secondPersonName: "" };
+    const couple = wizardState.draft.couples.find(item => item.id === wizardState.activeCoupleId)
+        || wizardState.draft.couples[0]
+        || {
+        firstPerson: { name: "" },
+        secondPerson: { name: "" },
+        children: []
+    };
+    const children = couple.children || [];
+    const expanded = wizardState.coupleChildrenExpanded;
+    const editingChild = Boolean(wizardState.editingChildId);
     return `${categoryFieldsHeading("Agora vamos adicionar os nomes", "Duas pessoas, um lugar especial na lista.")}
         <div class="form-stack">
+            ${wizardState.draft.couples.length > 1 ? `<div class="couple-picker" aria-label="Escolha o casal para editar">
+                <span class="fieldset-label">Casais cadastrados</span>
+                <div class="couple-picker-list">${wizardState.draft.couples.map((item, index) => `<button class="couple-picker-button" data-couple-action="select" data-couple-id="${escapeHtml(item.id)}" type="button" aria-pressed="${item.id === couple.id}">
+                    <strong>Casal ${index + 1}</strong>
+                    <span>${escapeHtml(item.firstPerson.name)} e ${escapeHtml(item.secondPerson.name)}</span>
+                    ${item.children?.length ? `<small>${pluralizeGuest(item.children.length, "criança", "crianças")}</small>` : ""}
+                </button>`).join("")}</div>
+            </div>` : ""}
             <div class="form-row">
                 <div class="wizard-field">
                     <label for="couple-first-name">Nome da primeira pessoa</label>
-                    <input id="couple-first-name" data-draft-field="coupleFirst" value="${escapeHtml(couple.firstPersonName)}" placeholder="Ex.: João" autocomplete="off">
+                    <input id="couple-first-name" data-draft-field="coupleFirst" value="${escapeHtml(couple.firstPerson.name)}" placeholder="Ex.: João" autocomplete="off">
                     <p class="field-error" data-error-for="coupleFirst"></p>
                 </div>
                 <div class="wizard-field">
                     <label for="couple-second-name">Nome da segunda pessoa</label>
-                    <input id="couple-second-name" data-draft-field="coupleSecond" value="${escapeHtml(couple.secondPersonName)}" placeholder="Ex.: Maria" autocomplete="off">
+                    <input id="couple-second-name" data-draft-field="coupleSecond" value="${escapeHtml(couple.secondPerson.name)}" placeholder="Ex.: Maria" autocomplete="off">
                     <p class="field-error" data-error-for="coupleSecond"></p>
                 </div>
             </div>
-            <span class="live-total">2 pessoas neste casal</span>
+            <button class="couple-children-toggle" data-couple-children-action="toggle" type="button" aria-expanded="${expanded}" aria-controls="couple-children-panel">
+                <span>${expanded ? "Ocultar seção de crianças" : children.length ? "Adicionar outra criança" : "Tem criança?"}</span>
+                <small>${children.length ? pluralizeGuest(children.length, "criança cadastrada", "crianças cadastradas") : "Cadastre quem acompanhará o casal"}</small>
+            </button>
+            <section class="couple-children-panel" id="couple-children-panel" ${expanded ? "" : "hidden"} aria-labelledby="couple-children-title">
+                <div class="builder-heading">
+                    <strong id="couple-children-title">Crianças que acompanham o casal</strong>
+                    <small>${pluralizeGuest(children.length, "criança", "crianças")}</small>
+                </div>
+                <div class="couple-child-builder">
+                    <div class="wizard-field field-grow">
+                        <label for="couple-child-name">Nome da criança</label>
+                        <input id="couple-child-name" data-buffer-field="childName" value="${escapeHtml(wizardState.buffer.childName)}" placeholder="Ex.: Pedro" autocomplete="off" aria-describedby="couple-child-error">
+                    </div>
+                    <button class="button button-ghost button-small" data-couple-children-action="save" type="button">${editingChild ? "Salvar alteração" : "+ Adicionar criança"}</button>
+                    ${editingChild ? '<button class="button button-text button-small" data-couple-children-action="cancel-edit" type="button">Cancelar edição</button>' : ""}
+                </div>
+                <p class="field-error" id="couple-child-error" aria-live="polite"></p>
+                <div class="couple-children-list" aria-live="polite">
+                    ${children.length ? children.map(child => `<div class="couple-child-row">
+                        <span>${escapeHtml(child.name)}</span>
+                        <div class="member-row-actions">
+                            <button class="member-action" data-child-action="edit" data-child-id="${escapeHtml(child.id)}" type="button">Editar</button>
+                            <button class="member-action remove" data-child-action="remove" data-child-id="${escapeHtml(child.id)}" type="button">Remover</button>
+                        </div>
+                    </div>`).join("") : '<p class="list-placeholder">Nenhuma criança adicionada.</p>'}
+                </div>
+            </section>
+            <p class="field-error" id="builder-error" aria-live="polite"></p>
+            <span class="live-total">${pluralizeGuest(countGroupPeople(wizardState.draft), "pessoa neste casal", "pessoas neste casal")}</span>
         </div>`;
 }
 
 function renderGodparentsFields() {
     const addingCouple = wizardState.builderMode === "couples";
     const editingSameType = wizardState.editingEntry?.type === wizardState.builderMode;
-    return `${categoryFieldsHeading("Agora vamos adicionar os nomes", "Alterne entre casais e avulsos para montar o grupo de padrinhos.")}
+    return `${categoryFieldsHeading("Agora vamos adicionar os nomes", "Alterne entre casais e avulsos para montar Padrinhos & Madrinhas.")}
         <div class="form-stack">
             <div class="segmented-wrap">
                 <span class="fieldset-label">Como deseja adicionar?</span>
-                <div class="segmented-control" role="radiogroup" aria-label="Formato dos padrinhos">
+                <div class="segmented-control" role="radiogroup" aria-label="Formato de Padrinhos & Madrinhas">
                     <button class="segmented-button" data-builder-mode="couples" role="radio" aria-checked="${addingCouple}" type="button"><span aria-hidden="true">∞</span><strong>Casais</strong><small>Adicione duas pessoas juntas</small></button>
                     <button class="segmented-button" data-builder-mode="individuals" role="radio" aria-checked="${!addingCouple}" type="button"><span aria-hidden="true">○</span><strong>Avulsos</strong><small>Adicione uma pessoa por vez</small></button>
                 </div>
@@ -535,20 +788,20 @@ function renderGodparentsFields() {
                             <div class="wizard-field"><label for="godparent-second-name">Segunda pessoa</label><input id="godparent-second-name" data-buffer-field="secondPersonName" value="${escapeHtml(wizardState.buffer.secondPersonName)}" placeholder="Ex.: Maria" autocomplete="off"></div>
                         </div>
                         <button class="button button-ghost button-small" data-builder-action="add-couple" type="button">${editingSameType ? "Salvar casal" : wizardState.draft.couples.length ? "+ Adicionar outro casal" : "+ Adicionar casal"}</button>` : `
-                        <div class="wizard-field field-grow"><label for="godparent-name">Nome</label><input id="godparent-name" data-buffer-field="personName" value="${escapeHtml(wizardState.buffer.personName)}" placeholder="Ex.: Fernanda" autocomplete="off"></div>
+                        <div class="wizard-field field-grow"><label for="godparent-name">Padrinho ou madrinha</label><input id="godparent-name" data-buffer-field="personName" value="${escapeHtml(wizardState.buffer.personName)}" placeholder="Ex.: Fernanda" autocomplete="off"></div>
                         <button class="button button-ghost button-small" data-builder-action="add-person" data-entry-type="individuals" type="button">${editingSameType ? "Salvar pessoa" : wizardState.draft.individuals.length ? "+ Adicionar outra pessoa" : "+ Adicionar pessoa"}</button>`}
                 </div>
                 <p class="field-error" id="builder-error"></p>
             </div>
             <div>
-                <span class="fieldset-label">Casais</span>
-                ${renderMemberRows(wizardState.draft.couples, "couples", couple => `${couple.firstPersonName} e ${couple.secondPersonName}`)}
+                <span class="fieldset-label">Casais de padrinhos e madrinhas</span>
+                ${renderMemberRows(wizardState.draft.couples, "couples")}
             </div>
             <div>
-                <span class="fieldset-label">Avulsos</span>
+                <span class="fieldset-label">Padrinhos e madrinhas avulsos</span>
                 ${renderMemberRows(wizardState.draft.individuals, "individuals")}
             </div>
-            <span class="live-total">${pluralizeGuest(countGroupPeople(wizardState.draft), "pessoa em Padrinhos", "pessoas em Padrinhos")}</span>
+            <span class="live-total">${pluralizeGuest(countGroupPeople(wizardState.draft), "pessoa em Padrinhos & Madrinhas", "pessoas em Padrinhos & Madrinhas")}</span>
         </div>`;
 }
 
@@ -562,35 +815,39 @@ function renderWizardFields() {
     wizardFields.innerHTML = renderers[wizardState.draft.category]?.() || "";
 }
 
-function renderReviewList(items, title, formatter) {
+function renderReviewList(items, title, renderItem) {
     if (!items.length) return "";
-    return `<section class="review-section"><h4>${title}</h4><ul class="review-list">${items.map(item => `<li>${escapeHtml(formatter(item))}</li>`).join("")}</ul></section>`;
+    return `<section class="review-section"><h4>${title}</h4><ul class="review-list">${items.map(item => `<li>${renderItem(item)}</li>`).join("")}</ul></section>`;
 }
 
 function renderGuestReview() {
     const group = normalizeStructuredGroup(wizardState.draft);
     const total = countGroupPeople(group);
+    const children = countChildrenInGroup(group);
     let lists = "";
     if (group.category === "godparents") {
-        lists += renderReviewList(group.couples, "Casais", item => `${item.firstPersonName} e ${item.secondPersonName}`);
-        lists += renderReviewList(group.individuals, "Avulsos", item => item.name);
+        lists += renderReviewList(group.couples, "Casais de padrinhos e madrinhas", item => renderCouplePresentation(item, false));
+        lists += renderReviewList(group.individuals, "Padrinhos e madrinhas avulsos", person => `<span>${escapeHtml(person.name)}</span>`);
     } else if (group.category === "couples") {
-        lists = renderReviewList(group.couples, "Casal", item => `${item.firstPersonName} e ${item.secondPersonName}`);
+        lists = renderReviewList(group.couples, "Casal", item => renderCouplePresentation(item, true));
     } else {
-        lists = renderReviewList(group.members, group.category === "family" ? "Integrantes" : "Convidados", item => item.name);
+        lists = renderReviewList(group.members, group.category === "family" ? "Integrantes" : "Convidados", renderPersonWithChildBadge);
     }
     document.querySelector("#guest-review").innerHTML = `
         <span class="category-label">${escapeHtml(GUEST_CATEGORIES[group.category].label)}</span>
         <h3>${escapeHtml(group.name)}</h3>
-        <p class="review-total">${pluralizeGuest(total, "pessoa", "pessoas")}</p>
+        <p class="review-total">${pluralizeGuest(total, "pessoa", "pessoas")}${children ? ` · ${pluralizeGuest(children, "criança", "crianças")}` : ""}</p>
         ${lists}`;
 }
 
 function wizardHasPendingEntry() {
     return Boolean(
         cleanGuestText(wizardState.buffer.personName) ||
+        wizardState.buffer.personIsChild ||
         cleanGuestText(wizardState.buffer.firstPersonName) ||
         cleanGuestText(wizardState.buffer.secondPersonName) ||
+        cleanGuestText(wizardState.buffer.childName) ||
+        wizardState.editingChildId ||
         wizardState.editingEntry
     );
 }
@@ -604,8 +861,8 @@ function getDraftValidation() {
     if (["family", "individual_group"].includes(group.category) && !group.members.length) errors.builder = "Adicione pelo menos uma pessoa.";
     if (group.category === "couples") {
         const couple = group.couples[0] || {};
-        if (!cleanGuestText(couple.firstPersonName)) errors.coupleFirst = "Informe o primeiro nome.";
-        if (!cleanGuestText(couple.secondPersonName)) errors.coupleSecond = "Informe o segundo nome.";
+        if (!cleanGuestText(couple.firstPerson?.name)) errors.coupleFirst = "Informe o primeiro nome.";
+        if (!cleanGuestText(couple.secondPerson?.name)) errors.coupleSecond = "Informe o segundo nome.";
     }
     if (group.category === "godparents" && !group.couples.length && !group.individuals.length) errors.builder = "Adicione ao menos um casal ou uma pessoa.";
     if (wizardHasPendingEntry()) errors.builder = "Conclua a inclusão do nome que está sendo editado.";
@@ -680,6 +937,10 @@ function openGuestEdit(groupId, trigger) {
     wizardState.step = 2;
     wizardState.editingId = group.id;
     wizardState.draft = structuredClone(group);
+    if (group.category === "couples") {
+        wizardState.activeCoupleId = group.couples[0]?.id || null;
+        wizardState.coupleChildrenExpanded = (group.couples[0]?.children?.length || 0) > 0;
+    }
     if (group.category === "individual_group") {
         wizardState.originChoice = INDIVIDUAL_ORIGINS.includes(group.relationshipGroup) ? group.relationshipGroup : "Outros";
     }
@@ -716,7 +977,7 @@ function selectGuestCategory(category) {
         return;
     }
     if (wizardState.draft.category !== category) wizardState.draft = createEmptyGuestDraft(category);
-    if (category === "godparents") wizardState.draft.name = "Padrinhos";
+    if (category === "godparents") wizardState.draft.name = "Padrinhos & Madrinhas";
     if (category === "couples") wizardState.draft.name = "Casais";
     if (category === "individual_group") {
         wizardState.originChoice = "Amigos";
@@ -728,10 +989,37 @@ function selectGuestCategory(category) {
 }
 
 function ensureDraftCouple() {
-    if (!wizardState.draft.couples.length) {
-        wizardState.draft.couples.push({ id: makeGuestId("couple"), firstPersonName: "", secondPersonName: "" });
+    let couple = wizardState.draft.couples.find(item => item.id === wizardState.activeCoupleId)
+        || wizardState.draft.couples[0];
+    if (!couple) {
+        const id = makeGuestId("couple");
+        couple = {
+            id,
+            firstPerson: { id: `${id}-first`, name: "" },
+            secondPerson: { id: `${id}-second`, name: "" },
+            children: []
+        };
+        wizardState.draft.couples.push(couple);
     }
-    return wizardState.draft.couples[0];
+    wizardState.activeCoupleId = couple.id;
+    return couple;
+}
+
+function selectDraftCouple(coupleId) {
+    if (cleanGuestText(wizardState.buffer.childName) || wizardState.editingChildId) {
+        const error = document.querySelector("#couple-child-error");
+        if (error) error.textContent = "Salve ou cancele a edição da criança antes de trocar de casal.";
+        focusControlNaturally(wizardFields.querySelector("#couple-child-name"));
+        return;
+    }
+    const couple = wizardState.draft.couples.find(item => item.id === coupleId);
+    if (!couple) return;
+    resetCoupleChildBuilder();
+    wizardState.activeCoupleId = couple.id;
+    wizardState.coupleChildrenExpanded = (couple.children?.length || 0) > 0;
+    renderWizardFields();
+    focusControlNaturally(wizardFields.querySelector("#couple-first-name"));
+    updateWizardNextState();
 }
 
 function handleDraftField(field, value) {
@@ -755,13 +1043,19 @@ function handleDraftField(field, value) {
         wizardState.draft.name = value;
         wizardState.draft.relationshipGroup = value;
     }
-    if (field === "coupleFirst") ensureDraftCouple().firstPersonName = value;
-    if (field === "coupleSecond") ensureDraftCouple().secondPersonName = value;
+    if (field === "coupleFirst") ensureDraftCouple().firstPerson.name = value;
+    if (field === "coupleSecond") ensureDraftCouple().secondPerson.name = value;
     updateWizardNextState();
 }
 
 function resetBuilder() {
-    wizardState.buffer = { personName: "", firstPersonName: "", secondPersonName: "" };
+    wizardState.buffer = {
+        personName: "",
+        personIsChild: false,
+        firstPersonName: "",
+        secondPersonName: "",
+        childName: ""
+    };
     wizardState.editingEntry = null;
 }
 
@@ -779,15 +1073,85 @@ function addOrUpdatePerson(type) {
     const collection = wizardState.draft[type];
     if (wizardState.editingEntry?.type === type) {
         const person = collection.find(item => item.id === wizardState.editingEntry.id);
-        if (person) person.name = name;
+        if (person) {
+            person.name = name;
+            if (wizardState.draft.category === "godparents") delete person.isChild;
+            else person.isChild = Boolean(wizardState.buffer.personIsChild);
+        }
     } else {
-        collection.push({ id: makeGuestId(type === "members" ? "member" : "godparent"), name });
+        const person = {
+            id: makeGuestId(type === "members" ? "member" : "godparent"),
+            name
+        };
+        if (wizardState.draft.category !== "godparents") person.isChild = Boolean(wizardState.buffer.personIsChild);
+        collection.push(person);
     }
     wizardState.dirty = true;
     resetBuilder();
     renderWizardFields();
     updateWizardNextState();
     focusControlNaturally(wizardFields.querySelector("[data-buffer-field='personName']"));
+}
+
+function resetCoupleChildBuilder() {
+    wizardState.buffer.childName = "";
+    wizardState.editingChildId = null;
+}
+
+function addOrUpdateCoupleChild() {
+    const name = cleanGuestText(wizardState.buffer.childName);
+    if (!name) {
+        const error = document.querySelector("#couple-child-error");
+        if (error) error.textContent = "Digite o nome da criança antes de adicionar.";
+        focusControlNaturally(wizardFields.querySelector("#couple-child-name"));
+        return;
+    }
+
+    const couple = ensureDraftCouple();
+    saveCoupleChild(couple, wizardState.editingChildId, name);
+
+    wizardState.dirty = true;
+    wizardState.coupleChildrenExpanded = true;
+    resetCoupleChildBuilder();
+    renderWizardFields();
+    updateWizardNextState();
+    focusControlNaturally(wizardFields.querySelector("#couple-child-name"));
+}
+
+function editCoupleChild(childId) {
+    const child = ensureDraftCouple().children?.find(item => item.id === childId);
+    if (!child) return;
+    wizardState.editingChildId = child.id;
+    wizardState.buffer.childName = child.name;
+    wizardState.coupleChildrenExpanded = true;
+    renderWizardFields();
+    focusControlNaturally(wizardFields.querySelector("#couple-child-name"));
+}
+
+function removeCoupleChild(childId) {
+    const couple = ensureDraftCouple();
+    removeCoupleChildFromCouple(couple, childId);
+    if (wizardState.editingChildId === childId) resetCoupleChildBuilder();
+    wizardState.dirty = true;
+    renderWizardFields();
+    updateWizardNextState();
+}
+
+function toggleCoupleChildren() {
+    if (wizardState.coupleChildrenExpanded && (cleanGuestText(wizardState.buffer.childName) || wizardState.editingChildId)) {
+        const error = document.querySelector("#couple-child-error");
+        if (error) error.textContent = "Salve ou cancele a edição da criança antes de recolher esta seção.";
+        focusControlNaturally(wizardFields.querySelector("#couple-child-name"));
+        return;
+    }
+    wizardState.coupleChildrenExpanded = !wizardState.coupleChildrenExpanded;
+    renderWizardFields();
+    requestAnimationFrame(() => {
+        const target = wizardState.coupleChildrenExpanded
+            ? wizardFields.querySelector("#couple-child-name")
+            : wizardFields.querySelector("[data-couple-children-action='toggle']");
+        focusControlNaturally(target);
+    });
 }
 
 function addOrUpdateCouple() {
@@ -801,9 +1165,23 @@ function addOrUpdateCouple() {
     }
     if (wizardState.editingEntry?.type === "couples") {
         const couple = wizardState.draft.couples.find(item => item.id === wizardState.editingEntry.id);
-        if (couple) Object.assign(couple, { firstPersonName, secondPersonName });
+        if (couple) {
+            couple.firstPerson.name = firstPersonName;
+            couple.secondPerson.name = secondPersonName;
+        }
     } else {
-        wizardState.draft.couples.push({ id: makeGuestId("couple"), firstPersonName, secondPersonName });
+        const id = makeGuestId("couple");
+        wizardState.draft.couples.push({
+            id,
+            firstPerson: {
+                id: `${id}-first`,
+                name: firstPersonName
+            },
+            secondPerson: {
+                id: `${id}-second`,
+                name: secondPersonName
+            }
+        });
     }
     wizardState.dirty = true;
     resetBuilder();
@@ -819,10 +1197,11 @@ function editGuestEntry(type, id) {
     wizardState.editingEntry = { type, id };
     wizardState.builderMode = type === "members" ? wizardState.builderMode : type;
     if (type === "couples") {
-        wizardState.buffer.firstPersonName = item.firstPersonName;
-        wizardState.buffer.secondPersonName = item.secondPersonName;
+        wizardState.buffer.firstPersonName = item.firstPerson.name;
+        wizardState.buffer.secondPersonName = item.secondPerson.name;
     } else {
         wizardState.buffer.personName = item.name;
+        wizardState.buffer.personIsChild = wizardState.draft.category !== "godparents" && Boolean(item.isChild);
     }
     renderWizardFields();
     focusControlNaturally(wizardFields.querySelector("[data-buffer-field]"));
@@ -840,26 +1219,32 @@ function saveGuestDraft() {
     const savedGroup = normalizeStructuredGroup(wizardState.draft);
     if (wizardState.mode === "edit") {
         state.guests = state.guests.filter(group => group.id !== wizardState.editingId);
-        const mergeTarget = savedGroup.category === "individual_group"
+        const mergeTarget = savedGroup.systemKey
+            ? findGuestSystemGroup(state.guests, savedGroup.systemKey)
+            : savedGroup.category === "individual_group"
             ? state.guests.find(group => group.category === "individual_group" && comparableGuestText(group.name) === comparableGuestText(savedGroup.name))
             : null;
         if (mergeTarget) {
-            mergeTarget.members.push(...savedGroup.members);
+            appendUniqueGuestEntries(mergeTarget.members, savedGroup.members);
+            appendUniqueGuestEntries(mergeTarget.couples, savedGroup.couples);
+            appendUniqueGuestEntries(mergeTarget.individuals, savedGroup.individuals);
             mergeTarget.isClosed = mergeTarget.isClosed || savedGroup.isClosed;
         } else {
             state.guests.push(savedGroup);
         }
     } else if (["godparents", "couples"].includes(savedGroup.category)) {
-        const existing = state.guests.find(group => group.category === savedGroup.category);
+        const existing = savedGroup.systemKey
+            ? findGuestSystemGroup(state.guests, savedGroup.systemKey)
+            : state.guests.find(group => group.category === savedGroup.category);
         if (existing) {
-            existing.couples.push(...savedGroup.couples);
-            existing.individuals.push(...savedGroup.individuals);
+            appendUniqueGuestEntries(existing.couples, savedGroup.couples);
+            appendUniqueGuestEntries(existing.individuals, savedGroup.individuals);
         } else {
             state.guests.unshift(savedGroup);
         }
     } else if (savedGroup.category === "individual_group") {
         const existing = state.guests.find(group => group.category === "individual_group" && comparableGuestText(group.name) === comparableGuestText(savedGroup.name));
-        if (existing) existing.members.push(...savedGroup.members);
+        if (existing) appendUniqueGuestEntries(existing.members, savedGroup.members);
         else state.guests.unshift(savedGroup);
     } else {
         state.guests.unshift(savedGroup);
@@ -899,13 +1284,13 @@ function advanceGuestWizard() {
 
 function getDetailsContent(group) {
     if (group.category === "godparents") {
-        return `${group.couples.length ? `<section class="details-section"><h3>Casais</h3><ul class="details-list">${group.couples.map(couple => `<li>${escapeHtml(couple.firstPersonName)} e ${escapeHtml(couple.secondPersonName)}</li>`).join("")}</ul></section>` : ""}
-            ${group.individuals.length ? `<section class="details-section"><h3>Avulsos</h3><ul class="details-list">${group.individuals.map(person => `<li>${escapeHtml(person.name)}</li>`).join("")}</ul></section>` : ""}`;
+        return `${group.couples.length ? `<section class="details-section"><h3>Casais de padrinhos e madrinhas</h3><ul class="details-list pair-details-list">${group.couples.map(couple => `<li>${renderCouplePresentation(couple, false)}</li>`).join("")}</ul></section>` : ""}
+            ${group.individuals.length ? `<section class="details-section"><h3>Padrinhos e madrinhas avulsos</h3><ul class="details-list">${group.individuals.map(person => `<li><span>${escapeHtml(person.name)}</span></li>`).join("")}</ul></section>` : ""}`;
     }
     if (group.category === "couples") {
-        return `<section class="details-section"><h3>Casais</h3><ul class="details-list">${group.couples.map(couple => `<li>${escapeHtml(couple.firstPersonName)} e ${escapeHtml(couple.secondPersonName)}</li>`).join("")}</ul></section>`;
+        return `<section class="details-section"><h3>Casais</h3><ul class="details-list pair-details-list">${group.couples.map(couple => `<li>${renderCouplePresentation(couple, true)}</li>`).join("")}</ul></section>`;
     }
-    return `<section class="details-section"><h3>${group.category === "family" ? "Integrantes" : "Convidados"}</h3><ul class="details-list">${group.members.map(person => `<li>${escapeHtml(person.name)}</li>`).join("")}</ul></section>`;
+    return `<section class="details-section"><h3>${group.category === "family" ? "Integrantes" : "Convidados"}</h3><ul class="details-list">${group.members.map(person => `<li>${renderPersonWithChildBadge(person)}</li>`).join("")}</ul></section>`;
 }
 
 function renderGuestDetails(groupId) {
@@ -913,7 +1298,8 @@ function renderGuestDetails(groupId) {
     if (!group) return;
     document.querySelector("#guest-details-category").textContent = `${GUEST_CATEGORIES[group.category].label} · ${group.isClosed ? "Fechado" : "Em aberto"}`;
     document.querySelector("#guest-details-title").textContent = group.name;
-    document.querySelector("#guest-details-summary").textContent = `${pluralizeGuest(countGroupPeople(group), "pessoa", "pessoas")} · ${getGroupMeta(group)}`;
+    const children = countChildrenInGroup(group);
+    document.querySelector("#guest-details-summary").textContent = `${pluralizeGuest(countGroupPeople(group), "pessoa", "pessoas")}${children ? ` · ${pluralizeGuest(children, "criança", "crianças")}` : ""} · ${getGroupMeta(group)}`;
     document.querySelector("#guest-details-content").innerHTML = getDetailsContent(group);
     document.querySelector("#details-toggle-closed").textContent = group.isClosed ? "Reabrir" : "Fechar";
 }
@@ -935,13 +1321,14 @@ function closeGuestDetails() {
 
 function renderCompleteListGroup(group) {
     const safeId = escapeHtml(group.id);
+    const children = countChildrenInGroup(group);
     return `
         <article class="complete-list-group">
             <header>
                 <div>
                     <span class="category-label">${escapeHtml(GUEST_CATEGORIES[group.category].label)}</span>
                     <h3>${escapeHtml(group.name)}</h3>
-                    <p>${pluralizeGuest(countGroupPeople(group), "pessoa", "pessoas")}</p>
+                    <p>${pluralizeGuest(countGroupPeople(group), "pessoa", "pessoas")}${children ? ` · ${pluralizeGuest(children, "criança", "crianças")}` : ""}</p>
                 </div>
                 ${group.isClosed ? '<span class="closed-badge"><span aria-hidden="true">✓</span> Fechado</span>' : ""}
             </header>
@@ -955,13 +1342,17 @@ function renderCompleteListGroup(group) {
 
 function renderCompleteGuestList() {
     const totalPeople = countAllPeople(state.guests);
+    const totalChildren = countAllChildren(state.guests);
+    const totalAdults = countAllAdults(state.guests);
     const closedGroups = state.guests.filter(group => group.isClosed).length;
-    const visibleGroups = filterGuestGroups(state.guests, completeListSearch.value, "all", "all");
+    const visibleGroups = sortGuestGroups(filterGuestGroups(state.guests, completeListSearch.value, "all", "all"));
     const hasSearch = Boolean(completeListSearch.value.trim());
 
     document.querySelector("#complete-list-summary").textContent = `${pluralizeGuest(totalPeople, "pessoa", "pessoas")} em ${pluralizeGuest(state.guests.length, "grupo", "grupos")}`;
     document.querySelector("#complete-list-stats").innerHTML = `
         <div><strong>${totalPeople}</strong><span>pessoas</span></div>
+        <div><strong>${totalChildren}</strong><span>crianças</span></div>
+        <div><strong>${totalAdults}</strong><span>adultos</span></div>
         <div><strong>${state.guests.length}</strong><span>grupos</span></div>
         <div><strong>${state.guests.length - closedGroups}</strong><span>em aberto</span></div>
         <div><strong>${closedGroups}</strong><span>fechados</span></div>`;
@@ -1044,6 +1435,10 @@ function formatWeddingDateForPrint(value) {
     return date ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "long" }).format(date) : "";
 }
 
+function formatPersonForPrint(person) {
+    return `${cleanGuestText(person?.name)}${person?.isChild ? " — Criança" : ""}`;
+}
+
 function renderPrintGroup(group, startNumber) {
     const closed = group.isClosed ? " · Fechado" : "";
     const header = `<h2>${escapeHtml(group.name)}</h2><p class="print-group-meta">${escapeHtml(GUEST_CATEGORIES[group.category].label)}${closed} · ${pluralizeGuest(countGroupPeople(group), "pessoa", "pessoas")}</p>`;
@@ -1051,18 +1446,18 @@ function renderPrintGroup(group, startNumber) {
     let body = "";
     if (group.category === "godparents") {
         if (group.couples.length) {
-            body += `<h3 class="print-subtitle">Casais</h3><ol start="${current}">${group.couples.map(couple => `<li>${escapeHtml(couple.firstPersonName)} e ${escapeHtml(couple.secondPersonName)}</li>`).join("")}</ol>`;
+            body += `<h3 class="print-subtitle">Casais de padrinhos e madrinhas</h3><ol start="${current}">${group.couples.map(couple => `<li>${escapeHtml(couple.firstPerson.name)} e ${escapeHtml(couple.secondPerson.name)}</li>`).join("")}</ol>`;
             current += group.couples.length;
         }
         if (group.individuals.length) {
-            body += `<h3 class="print-subtitle">Avulsos</h3><ol start="${current}">${group.individuals.map(person => `<li>${escapeHtml(person.name)}</li>`).join("")}</ol>`;
+            body += `<h3 class="print-subtitle">Padrinhos e madrinhas avulsos</h3><ol start="${current}">${group.individuals.map(person => `<li>${escapeHtml(person.name)}</li>`).join("")}</ol>`;
             current += group.individuals.length;
         }
     } else if (group.category === "couples") {
-        body = `<ol start="${current}">${group.couples.map(couple => `<li>${escapeHtml(couple.firstPersonName)} e ${escapeHtml(couple.secondPersonName)}</li>`).join("")}</ol>`;
+        body = `<ol start="${current}">${group.couples.map(couple => `<li><span>${escapeHtml(couple.firstPerson.name)} e ${escapeHtml(couple.secondPerson.name)}</span>${couple.children?.length ? `<div class="print-couple-children"><strong>Crianças:</strong><ul>${couple.children.map(child => `<li>${escapeHtml(child.name)}</li>`).join("")}</ul></div>` : ""}</li>`).join("")}</ol>`;
         current += group.couples.length;
     } else {
-        body = `<ol start="${current}">${group.members.map(person => `<li>${escapeHtml(person.name)}</li>`).join("")}</ol>`;
+        body = `<ol start="${current}">${group.members.map(person => `<li>${escapeHtml(formatPersonForPrint(person))}</li>`).join("")}</ol>`;
         current += group.members.length;
     }
     return { html: `<section class="print-group">${header}${body}</section>`, nextNumber: current };
@@ -1072,11 +1467,7 @@ function renderGuestPrintView() {
     const names = [state.settings.partnerOne, state.settings.partnerTwo].map(cleanGuestText).filter(Boolean);
     const title = names.length === 2 ? `${names[0]} & ${names[1]}` : names[0] || "Nosso Casamento";
     const weddingDate = formatWeddingDateForPrint(state.settings.weddingDate);
-    const categoryOrder = ["godparents", "family", "couples", "individual_group"];
-    const sortedGroups = [...state.guests].sort((a, b) => {
-        const categoryDifference = categoryOrder.indexOf(a.category) - categoryOrder.indexOf(b.category);
-        return categoryDifference || a.name.localeCompare(b.name, "pt-BR");
-    });
+    const sortedGroups = sortGuestGroups(state.guests);
     let number = 1;
     const sections = sortedGroups.map(group => {
         const rendered = renderPrintGroup(group, number);
@@ -1091,7 +1482,11 @@ function renderGuestPrintView() {
             ${weddingDate ? `<p>${escapeHtml(weddingDate)}</p>` : ""}
         </header>
         ${sections || "<p>Nenhum convidado adicionado.</p>"}
-        <p class="print-total">Total de convidados: ${pluralizeGuest(countAllPeople(state.guests), "pessoa", "pessoas")}</p>`;
+        <div class="print-total">
+            <p>Total de convidados: ${pluralizeGuest(countAllPeople(state.guests), "pessoa", "pessoas")}</p>
+            <p>Adultos: ${countAllAdults(state.guests)}</p>
+            <p>Crianças: ${countAllChildren(state.guests)}</p>
+        </div>`;
 }
 
 function exportGuestsToPdf() {
@@ -1137,6 +1532,11 @@ wizardFields.addEventListener("change", event => {
     if (event.target.tagName === "SELECT" && event.target.dataset.draftField) {
         handleDraftField(event.target.dataset.draftField, event.target.value);
     }
+    if (event.target.dataset.bufferBoolean) {
+        wizardState.buffer[event.target.dataset.bufferBoolean] = Boolean(event.target.checked);
+        wizardState.dirty = true;
+        updateWizardNextState();
+    }
 });
 wizardFields.addEventListener("focusout", event => {
     if (event.target.dataset.draftField !== "familyName") return;
@@ -1145,6 +1545,30 @@ wizardFields.addEventListener("focusout", event => {
     wizardState.draft.name = buildFamilyDisplayName(suffix);
 });
 wizardFields.addEventListener("click", event => {
+    const coupleButton = event.target.closest("[data-couple-action]");
+    if (coupleButton?.dataset.coupleAction === "select") {
+        selectDraftCouple(coupleButton.dataset.coupleId);
+        return;
+    }
+    const coupleChildrenButton = event.target.closest("[data-couple-children-action]");
+    if (coupleChildrenButton) {
+        const action = coupleChildrenButton.dataset.coupleChildrenAction;
+        if (action === "toggle") toggleCoupleChildren();
+        if (action === "save") addOrUpdateCoupleChild();
+        if (action === "cancel-edit") {
+            resetCoupleChildBuilder();
+            renderWizardFields();
+            updateWizardNextState();
+            focusControlNaturally(wizardFields.querySelector("#couple-child-name"));
+        }
+        return;
+    }
+    const childButton = event.target.closest("[data-child-action]");
+    if (childButton) {
+        if (childButton.dataset.childAction === "edit") editCoupleChild(childButton.dataset.childId);
+        if (childButton.dataset.childAction === "remove") removeCoupleChild(childButton.dataset.childId);
+        return;
+    }
     const modeButton = event.target.closest("[data-builder-mode]");
     if (modeButton) {
         wizardState.builderMode = modeButton.dataset.builderMode;
@@ -1176,6 +1600,10 @@ wizardFields.addEventListener("keydown", event => {
     if (event.key !== "Enter" || event.target.tagName === "SELECT") return;
     if (!event.target.dataset.bufferField) return;
     event.preventDefault();
+    if (wizardState.draft.category === "couples" && event.target.dataset.bufferField === "childName") {
+        addOrUpdateCoupleChild();
+        return;
+    }
     if (wizardState.draft.category === "godparents" && wizardState.builderMode === "couples") addOrUpdateCouple();
     else addOrUpdatePerson(wizardState.draft.category === "godparents" ? "individuals" : "members");
 });

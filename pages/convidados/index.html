@@ -10,11 +10,11 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="../../assets/global.css">
     <link rel="stylesheet" href="../../components/sidebar.css?v=20260722-logout-1">
-    <link rel="stylesheet" href="style.css?v=20260728-guests-2">
+    <link rel="stylesheet" href="style.css?v=20260728-guests-4">
     <script src="../../js/supabase.js?v=20260722-logout-1" defer></script>
     <script src="../../js/app.js" defer></script>
     <script src="../../components/sidebar.js?v=20260722-logout-1" defer></script>
-    <script src="main.js?v=20260728-guests-2" defer></script>
+    <script src="main.js?v=20260728-guests-4" defer></script>
 </head>
 <body data-page="convidados">
     <div class="app-shell">
@@ -45,6 +45,8 @@
                 <section class="guest-summary" aria-label="Resumo da lista de convidados">
                     <div class="summary-item"><strong id="summary-people">0</strong><span>pessoas</span></div>
                     <div class="summary-divider" aria-hidden="true"></div>
+                    <div class="summary-item" id="summary-children-item" hidden><strong id="summary-children">0</strong><span>crianças</span></div>
+                    <div class="summary-divider" id="summary-children-divider" aria-hidden="true" hidden></div>
                     <div class="summary-item"><strong id="summary-groups">0</strong><span>grupos</span></div>
                     <div class="summary-divider" aria-hidden="true"></div>
                     <div class="summary-item"><strong id="summary-closed">0</strong><span>fechados</span></div>
@@ -67,7 +69,7 @@
                         <label class="sr-only" for="guest-category-filter">Filtrar por categoria</label>
                         <select id="guest-category-filter">
                             <option value="all">Todas as categorias</option>
-                            <option value="godparents">Padrinhos</option>
+                            <option value="godparents">Padrinhos &amp; Madrinhas</option>
                             <option value="family">Famílias</option>
                             <option value="couples">Casais</option>
                             <option value="individual_group">Grupos de avulsos</option>
@@ -107,8 +109,8 @@
                     <div class="choice-grid category-choice-grid" id="category-choices" role="radiogroup" aria-label="Categoria dos convidados">
                         <button class="choice-card" type="button" role="radio" aria-checked="false" data-category="godparents">
                             <span class="choice-icon" aria-hidden="true">◇</span>
-                            <strong>Padrinhos</strong>
-                            <small>Organize casais ou padrinhos e madrinhas que entrarão individualmente.</small>
+                            <strong>Padrinhos &amp; Madrinhas</strong>
+                            <small>Organize casais e padrinhos ou madrinhas avulsos.</small>
                         </button>
                         <button class="choice-card" type="button" role="radio" aria-checked="false" data-category="family">
                             <span class="choice-icon" aria-hidden="true">⌂</span>
