@@ -297,7 +297,7 @@ test("as cinco páginas internas carregam a mesma sidebar versionada", () => {
     for (const page of pages) {
         const html = fs.readFileSync(path.join(projectRoot, "pages", page, "index.html"), "utf8");
         assert.match(html, /components\/sidebar\.css\?v=20260722-logout-1/);
-        assert.match(html, /js\/supabase\.js\?v=20260722-logout-1/);
+        assert.match(html, /js\/supabase\.js\?v=\d{8}-[a-z0-9-]+/);
         assert.match(html, /components\/sidebar\.js\?v=20260722-logout-1/);
         assert.match(html, /id="sidebar-container"/);
     }

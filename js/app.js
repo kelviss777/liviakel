@@ -25,6 +25,15 @@ function loadState() {
     }
 }
 
+function loadLegacyGuests() {
+    try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+        return Array.isArray(saved?.guests) ? structuredClone(saved.guests) : [];
+    } catch {
+        return [];
+    }
+}
+
 function loadLegacyVenues() {
     try {
         const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
@@ -58,7 +67,6 @@ function saveState() {
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
         ...saved,
-        guests: state.guests,
         tasks: state.tasks,
         expenses: state.expenses
     }));

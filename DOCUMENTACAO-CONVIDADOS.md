@@ -1,18 +1,21 @@
-# Convidados — modelo local e preparação para persistência remota
+# Convidados — modelo local e integração com Supabase
 
 ## 1. Escopo atual
 
 A página de Convidados usa HTML, CSS e JavaScript puro. Cadastro guiado, edição, exclusão, busca, filtros, fechamento, lista completa e impressão/PDF continuam disponíveis.
 
-Os dados permanecem no `localStorage`, por meio do fluxo existente de `js/app.js`. Não há integração de Convidados com Supabase ou backend nesta etapa.
+O Supabase é a fonte de verdade de Convidados. `guest_groups` guarda os grupos e `guest_members` guarda as pessoas. O modelo versão 6 continua existindo em memória para renderização, busca, filtros, detector de duplicados, lista completa e PDF, mas não é regravado por `saveState()`.
+
+O `localStorage` é lido somente para a migração automática dos dados anteriores. Depois do carregamento remoto, nenhum cartão depende do armazenamento do dispositivo.
 
 Arquivos da funcionalidade:
 
 - `pages/convidados/index.html`: página e diálogos;
 - `pages/convidados/style.css`: interface, responsividade e impressão;
-- `pages/convidados/main.js`: modelo, normalização, contagens e fluxos;
-- `tests/frontend-guests.test.js`: testes de modelo e interface;
-- `js/app.js`: persistência local compartilhada, sem nova lógica específica.
+- `pages/convidados/main.js`: modelo, normalização, reconstrução, migração e fluxos assíncronos;
+- `tests/frontend-guests.test.js`: testes de modelo, interface, mapeamentos e mocks do Supabase;
+- `js/supabase.js`: acesso remoto centralizado a `guest_groups` e `guest_members`;
+- `js/app.js`: preserva a leitura dos convidados antigos para migração e deixa de gravar convidados remotos.
 
 ## 2. Categorias
 
@@ -179,9 +182,9 @@ Pessoas antigas sem `notes` recebem `notes: ""` somente no estado normalizado em
 
 Marcações antigas `firstPersonIsChild`, `secondPersonIsChild` ou `isChild` dentro de `firstPerson`/`secondPerson` são ignoradas. Os dois nomes continuam existindo como adultos; nenhuma criança sem nome é criada. `isClosed` e demais dados válidos do grupo são preservados. A leitura não grava automaticamente o estado normalizado.
 
-## 16. Modelo futuro: `guest_groups`
+## 16. Modelo remoto: `guest_groups`
 
-Mapeamento conceitual futuro:
+`mapGuestGroupRowToLocal()` converte a linha remota para camelCase. `mapGuestGroupToDatabase()` faz o caminho inverso e omite arrays, IDs técnicos, datas e estado temporário de UI:
 
 | JavaScript | Campo remoto | Tipo sugerido |
 |---|---|---|
@@ -196,11 +199,11 @@ Mapeamento conceitual futuro:
 | `systemKey` | `system_key` | texto anulável |
 | `sortOrder` | `sort_order` | inteiro |
 | `createdAt` | `created_at` | data/hora com fuso |
-| futuro | `updated_at` | data/hora com fuso |
+| atualização remota | `updated_at` | data/hora com fuso |
 
-## 17. Modelo futuro: `guest_members`
+## 17. Modelo remoto: `guest_members`
 
-Ao achatar o modelo local, cada pessoa será uma linha conceitual:
+`mapGuestMemberRow()` converte linhas do banco. `flattenGuestGroupMembersForDatabase()` achata o modelo local; cada pessoa é uma linha:
 
 | Origem atual ou derivada | Campo remoto | Regra |
 |---|---|---|
@@ -213,9 +216,9 @@ Ao achatar o modelo local, cada pessoa será uma linha conceitual:
 | `couple.id` para adultos | `pair_id` | compartilhado pelos dois adultos |
 | unidade do casal | `household_id` | compartilhado pelos adultos e crianças vinculadas |
 | posição | `sort_order` | ordem no grupo/unidade |
-| futuro | `created_at` / `updated_at` | datas remotas |
+| banco | `created_at` / `updated_at` | datas remotas |
 
-Tipos conceituais recomendados:
+Valores de `member_type` utilizados exatamente como suportados pelo banco:
 
 - `family_member`;
 - `individual_guest`;
@@ -224,23 +227,25 @@ Tipos conceituais recomendados:
 - `godparent_couple`;
 - `godparent_individual`.
 
-## 18. Uso futuro de `pair_id`
+## 18. Uso de `pair_id`
 
-Os dois adultos do casal compartilharão o `pair_id` derivado de `couple.id`. Crianças vinculadas terão `pair_id` nulo, pois não formam o par. O ID individual de cada adulto continua independente.
+Os dois adultos do casal compartilham um `pair_id` UUID. Crianças vinculadas têm `pair_id` nulo, pois não formam o par. O ID individual de cada adulto continua independente. Em novos casais e na migração, IDs locais como `couple-...` nunca são enviados: `crypto.randomUUID()` cria o vínculo remoto. Na edição, o UUID existente é preservado.
 
-## 19. Uso futuro de `household_id`
+## 19. Uso de `household_id`
 
-Os dois adultos e todas as crianças de `couple.children` compartilharão o mesmo `household_id`. Esse campo representará a unidade que chega junta e permitirá recuperar o vínculo das crianças sem classificá-las como parte do par adulto.
+Os dois adultos e todas as crianças de `couple.children` compartilham o mesmo `household_id` UUID. Esse campo representa a unidade que chega junta e permite reconstruir as crianças dentro do casal correto. Casais de padrinhos também compartilham um `household_id`, embora não aceitem crianças.
 
-## 20. Persistência e segurança futuras
+## 20. Persistência e segurança
 
-Uma integração futura deverá associar grupos ao `wedding_id`, validar nomes não vazios, restringir uma chave de sistema por casamento e preservar a ordem. A RLS futura deverá autorizar grupos e integrantes por meio do casamento e de seus membros.
+Todas as operações chamam a camada de `js/supabase.js`. Ela resolve o contexto pelo fluxo Supabase Auth → `wedding_members` → `wedding_id`. A interface nunca fornece nem escolhe livremente o casamento. O `wedding_id` é acrescentado somente pela função autenticada de criação do grupo.
 
-Nenhuma tabela, migration, política ou comando de banco foi criado ou executado nesta etapa.
+As policies RLS existentes autorizam grupos e integrantes pelo casamento. Erros de permissão são registrados integralmente no console e traduzidos para mensagem amigável; o código não tenta contornar RLS, não usa `service_role` e não acessa `auth.users`.
 
-## 21. Limites desta alteração
+Nenhuma tabela, migration, policy ou comando SQL foi criado ou executado nesta integração.
 
-Não foram alterados sidebar, Locais, Checklist, Orçamento, Visão geral, autenticação, backend ou Supabase. `js/app.js` e `assets/global.css` foram apenas analisados; não precisaram de mudança.
+## 21. Limites desta integração
+
+Não foram alterados sidebar, Locais, Checklist, Orçamento, Visão geral, autenticação, backend, schema ou policies RLS. `public.guests` não é consultada, inserida, atualizada, excluída nem apagada. A nova tela usa exclusivamente `guest_groups` e `guest_members`.
 
 ## 22. Dois níveis de observação
 
@@ -278,16 +283,16 @@ Na edição, o campo abre preenchido quando há conteúdo e pode ser alterado ou
 
 `normalizeGuestPerson()` centraliza `id`, `name`, `notes` e, quando aplicável, `isChild`. Os wrappers de adulto e criança reutilizam essa função, evitando regras duplicadas entre categorias.
 
-## 23. Mapeamento futuro de `notes`
+## 23. Persistência de `notes`
 
-Os destinos conceituais são distintos:
+Os destinos remotos são distintos:
 
-| Modelo local | Destino futuro | Tipo PostgreSQL sugerido |
+| Modelo local | Destino remoto | Operação |
 |---|---|---|
-| `group.notes` | `guest_groups.notes` | `TEXT NOT NULL DEFAULT ''` |
-| `person.notes` | `guest_members.notes` | `TEXT NOT NULL DEFAULT ''` |
+| `group.notes` | `guest_groups.notes` | UPDATE isolado de `notes` |
+| `person.notes` | `guest_members.notes` | UPDATE incremental da pessoa por ID |
 
-O padrão vazio evita dois estados equivalentes para “sem observação” (`NULL` e string vazia). Esta é somente uma decisão de modelagem documentada. Nenhum SQL, tabela, migration, política RLS ou integração remota foi criado nesta etapa.
+Valores `NULL` vindos do banco viram `""` no modelo em memória. Ao salvar uma observação de grupo, somente `guest_groups.notes` é enviada; integrantes e `is_closed` não são alterados. Observações individuais seguem no payload da pessoa correta, preservando ID, `member_type`, `pair_id`, `household_id` e `is_child`.
 
 ## 24. Percurso central de pessoas
 
@@ -355,23 +360,31 @@ O estado do assistente também guarda os nomes originais por ID. Isso permite ve
 - Crianças de casal: a criança é verificada antes de entrar em `couple.children`; se o casal aceitar o alerta, ela mantém o ID e o `householdId` corretos e é incluída uma vez.
 - Padrinhos & Madrinhas: os dois integrantes de um casal são verificados separadamente; padrinho ou madrinha avulso usa a mesma rotina. O fato de ser grupo de sistema não cria exceções.
 
-## 29. Funcionamento depois do Supabase
+## 29. Funcionamento com o Supabase
 
-O fluxo planejado permanece:
+O fluxo em produção é:
 
 ```text
-Supabase -> estado normalizado em memória -> getAllGuestPeople() -> detector
+Supabase Auth -> wedding_members -> guest_groups + guest_members
+              -> estado normalizado em memória
+              -> getAllGuestPeople() -> detector/lista/PDF
 ```
 
-Somente a origem e o salvamento do estado mudarão. Normalização, percurso, comparação, contexto de grupo e diálogo não dependem da persistência local, portanto não precisarão ser reescritos para a futura integração.
+`initializeGuests()` mostra o estado de carregamento, consulta os dois conjuntos de linhas, chama `rebuildGuestGroupsFromRows()`, normaliza os grupos e só então libera os controles. Busca e filtros continuam locais e não fazem requisição a cada tecla. Recarregar a página ou entrar em outro dispositivo reconstrói a mesma lista a partir do casamento autenticado.
+
+No cadastro, o grupo é criado antes dos integrantes. O estado e o modal só são concluídos depois dos dois sucessos. Se a criação de integrantes falhar, o frontend tenta excluir o grupo recém-criado como compensação, registra qualquer falha adicional e mantém o formulário.
+
+Na edição, `replaceOrSyncGuestGroupMembers()` compara IDs remotos: atualiza apenas pessoas alteradas, insere pessoas sem UUID remoto e exclui somente IDs removidos. Não existe “delete tudo e reinsere”. Depois da operação, a lista é recarregada do Supabase. Uma falha intermediária também dispara tentativa de recarga sem apagar o rascunho.
+
+Fechar/Reabrir usa um UPDATE isolado de `is_closed`. A observação do grupo usa um UPDATE isolado de `notes`. A exclusão comum remove apenas `guest_groups`; o `ON DELETE CASCADE` já existente cuida de `guest_members`. Para `system_key = "godparents"`, a ação remove os integrantes e mantém o grupo de sistema vazio, evitando perder sua identidade fixa.
 
 ## 30. Verificação desta versão
 
-Os testes em `tests/frontend-guests.test.js` cobrem modelo antigo, IDs, famílias, casais, crianças, Padrinhos & Madrinhas, busca, filtros, contagens, impressão, normalização de nomes, correspondência exata e semelhante, exclusão do próprio ID, homônimo em outro grupo, `group.notes`, `person.notes`, separação entre os dois níveis, edição isolada pelo cartão e estrutura acessível/responsiva dos diálogos.
+Os testes em `tests/frontend-guests.test.js` cobrem modelo antigo, mapeamentos banco ↔ JavaScript, os seis `member_type`, IDs UUID, reconstrução por `pair_id` e `household_id`, famílias, avulsos, casais, crianças, Padrinhos & Madrinhas, busca, filtros, contagens, impressão, duplicados, observações, acesso autenticado, RLS e sincronização incremental com mocks. Nenhum teste chama o projeto Supabase real.
 
 Os contratos responsivos cobrem viewports de 375 px, 390 px, 430 px e desktop. Em telas pequenas, ações podem quebrar linha, os diálogos respeitam a altura dinâmica e `safe-area-inset-bottom`, e observações longas usam quebra natural sem rolagem horizontal.
 
-A funcionalidade de capacidade da lista versus capacidade do local não foi implementada. Banco, SQL, migrations, RLS, Supabase, backend, Locais, Visão Geral, sidebar e demais páginas permaneceram fora do escopo.
+A funcionalidade de capacidade da lista versus capacidade do local não foi implementada. SQL, migrations, schema, policies RLS, backend, Locais, Visão Geral, sidebar e demais páginas permaneceram fora do escopo.
 
 ## 31. Posicionamento dos dialogs e bloqueio de scroll
 
@@ -382,3 +395,18 @@ Todos os dialogs abertos na página de Convidados usam a mesma responsabilidade 
 Os dialogs abertos usam posição fixa, margens automáticas e `max-height` baseado em `100dvh`, descontando margens de segurança e `safe-area`. O `margin-bottom` isolado que empurrava alguns modais para a parte inferior foi removido. O backdrop permanece fixo e conserva o escurecimento e o desfoque globais.
 
 No dialog “Observação do grupo”, o formulário usa as linhas `cabeçalho / conteúdo / ações`. Apenas `.group-notes-content` recebe `overflow-y: auto` quando necessário; cabeçalho e ações continuam acessíveis. O textarea mantém gesto vertical próprio. A página de fundo permanece fixa durante wheel, toque, trackpad e navegação por página, e a compensação da scrollbar evita deslocamento horizontal no desktop.
+
+## 32. Migração do `localStorage`
+
+`loadLegacyGuests()` preserva a leitura da chave `nosso-casamento-v1`, mas `saveState()` não grava mais `state.guests`. A migração roda silenciosamente depois da primeira leitura remota e não abre o detector visual de duplicados.
+
+Para cada casamento são usadas duas chaves:
+
+- `nosso-casamento-guests-backup:<weddingId>`: cópia da estrutura local anterior à primeira tentativa;
+- `nosso-casamento-guests-migrated:<weddingId>`: marca criada somente depois do sucesso de todas as operações.
+
+A identidade conservadora usa `category` + nome normalizado + `relationshipGroup` normalizado. Padrinhos & Madrinhas usa exclusivamente `system_key = "godparents"`; pessoas locais ainda ausentes são anexadas ao grupo remoto, sem criar um segundo grupo. Para outra identidade já presente, a migração não sobrescreve dados remotos ambíguos. Grupos ausentes são criados com IDs do banco, e os vínculos de casal recebem novos UUIDs seguros.
+
+Se uma tentativa falhar, a marca não é criada, o backup e os dados originais permanecem, e a próxima carga pode tentar novamente. Grupos concluídos antes da falha são reconhecidos pela identidade e não são duplicados. Não há `localStorage.clear()` e a tabela antiga `public.guests` permanece intocada.
+
+Durante carregamento, salvamento, alteração de estado, observação e exclusão, os controles relacionados ficam desabilitados para impedir clique duplo. Em erro, o console recebe o objeto completo, a interface mostra mensagem amigável e não apresenta sucesso nem fecha o formulário incorretamente.

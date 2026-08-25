@@ -213,7 +213,7 @@ test("não confirma uma atualização que retornou zero linhas", async () => {
     );
 });
 
-test("mantém locais apenas para migração e não os recria no saveState", () => {
+test("mantém locais e convidados antigos só para migração e não os recria no saveState", () => {
     const originalStoredState = {
         settings: {
             partnerOne: "Valor antigo",
@@ -277,7 +277,7 @@ test("mantém locais apenas para migração e não os recria no saveState", () =
     assert.deepEqual(persistedState.settings, originalStoredState.settings);
     assert.deepEqual(
         persistedState.guests,
-        [{ id: "guest-1" }, { id: "guest-2" }]
+        [{ id: "guest-1" }]
     );
     assert.deepEqual(persistedState.venues, [{ id: "venue-1" }]);
     assert.deepEqual(persistedState.tasks, [{ id: "task-1" }]);
@@ -286,7 +286,7 @@ test("mantém locais apenas para migração e não os recria no saveState", () =
     vm.runInContext("removeLegacyVenues(); saveState()", context);
     const stateAfterMigration = JSON.parse(storedValue);
     assert.equal(Object.hasOwn(stateAfterMigration, "venues"), false);
-    assert.deepEqual(stateAfterMigration.guests, [{ id: "guest-1" }, { id: "guest-2" }]);
+    assert.deepEqual(stateAfterMigration.guests, [{ id: "guest-1" }]);
     assert.deepEqual(stateAfterMigration.tasks, [{ id: "task-1" }]);
     assert.deepEqual(stateAfterMigration.expenses, [{ id: "expense-1" }]);
 });

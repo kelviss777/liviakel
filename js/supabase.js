@@ -78,6 +78,119 @@ function createVenueSupabaseError(error, fallbackMessage, code) {
     return createSupabaseAppError(fallbackMessage, code, error);
 }
 
+const GUEST_MEMBER_TYPES = new Set([
+    "family_member",
+    "individual_guest",
+    "couple_adult",
+    "couple_child",
+    "godparent_couple",
+    "godparent_individual"
+]);
+
+function createGuestSupabaseError(error, fallbackMessage, code) {
+    if (isSupabasePermissionError(error)) {
+        return createSupabaseAppError(
+            "Sua conta não tem permissão para realizar esta operação nos convidados do casamento.",
+            "GUEST_PERMISSION_DENIED",
+            error
+        );
+    }
+
+    return createSupabaseAppError(fallbackMessage, code, error);
+}
+
+function mapGuestGroupRowToLocal(record = {}) {
+    return {
+        id: String(record.id ?? ""),
+        category: String(record.category ?? "individual_group"),
+        name: String(record.name ?? ""),
+        relationshipGroup: String(record.relationship_group ?? ""),
+        notes: String(record.notes ?? ""),
+        isClosed: record.is_closed === true,
+        isSystem: record.is_system === true,
+        systemKey: record.system_key == null ? null : String(record.system_key),
+        sortOrder: Number.isFinite(Number(record.sort_order)) && record.sort_order !== null
+            ? Number(record.sort_order)
+            : null,
+        createdAt: String(record.created_at ?? ""),
+        updatedAt: String(record.updated_at ?? "")
+    };
+}
+
+function mapGuestGroupToDatabase(group = {}) {
+    const sortOrder = group.sortOrder === null || group.sortOrder === undefined || group.sortOrder === ""
+        ? null
+        : Number(group.sortOrder);
+    return {
+        category: String(group.category ?? "").trim(),
+        name: String(group.name ?? "").trim(),
+        relationship_group: String(group.relationshipGroup ?? "").trim() || null,
+        notes: String(group.notes ?? "").trim() || null,
+        is_closed: group.isClosed === true,
+        is_system: group.isSystem === true,
+        system_key: String(group.systemKey ?? "").trim() || null,
+        sort_order: Number.isFinite(sortOrder) ? sortOrder : null
+    };
+}
+
+function mapGuestMemberRow(record = {}) {
+    return {
+        id: String(record.id ?? ""),
+        guestGroupId: String(record.guest_group_id ?? ""),
+        name: String(record.name ?? ""),
+        notes: String(record.notes ?? ""),
+        isChild: record.is_child === true,
+        memberType: String(record.member_type ?? ""),
+        pairId: record.pair_id == null ? null : String(record.pair_id),
+        householdId: record.household_id == null ? null : String(record.household_id),
+        sortOrder: Number.isFinite(Number(record.sort_order)) && record.sort_order !== null
+            ? Number(record.sort_order)
+            : null,
+        createdAt: String(record.created_at ?? ""),
+        updatedAt: String(record.updated_at ?? "")
+    };
+}
+
+function guestUuidForDatabase(value, fieldName) {
+    const normalized = String(value ?? "").trim();
+    if (!normalized) return null;
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(normalized)) {
+        return normalized;
+    }
+    throw createSupabaseAppError(
+        `O vínculo ${fieldName} precisa ser um UUID válido.`,
+        "GUEST_MEMBER_UUID_INVALID"
+    );
+}
+
+function mapGuestMemberToDatabase(member = {}) {
+    const memberType = String(member.memberType ?? "").trim();
+    if (!GUEST_MEMBER_TYPES.has(memberType)) {
+        throw createSupabaseAppError(
+            "O tipo de integrante informado não é suportado.",
+            "GUEST_MEMBER_TYPE_INVALID"
+        );
+    }
+    const sortOrder = member.sortOrder === null || member.sortOrder === undefined || member.sortOrder === ""
+        ? null
+        : Number(member.sortOrder);
+    return {
+        name: String(member.name ?? "").trim(),
+        notes: String(member.notes ?? "").trim() || null,
+        is_child: member.isChild === true,
+        member_type: memberType,
+        pair_id: guestUuidForDatabase(member.pairId, "pair_id"),
+        household_id: guestUuidForDatabase(member.householdId, "household_id"),
+        sort_order: Number.isFinite(sortOrder) ? sortOrder : null
+    };
+}
+
+function guestMemberPayloadChanged(current, desired) {
+    const currentPayload = mapGuestMemberToDatabase(current);
+    const desiredPayload = mapGuestMemberToDatabase(desired);
+    return Object.keys(desiredPayload).some(key => currentPayload[key] !== desiredPayload[key]);
+}
+
 async function getAuthenticatedUser() {
     const client = await getSupabaseClient();
     const { data, error } = await client.auth.getUser();
@@ -437,12 +550,282 @@ async function deleteCurrentWeddingVenue(venueId) {
     return { id: String(data.id) };
 }
 
+async function requireCurrentWeddingGuestGroup(client, weddingId, groupId) {
+    const { data, error } = await client
+        .from("guest_groups")
+        .select("id")
+        .eq("id", groupId)
+        .eq("wedding_id", weddingId)
+        .maybeSingle();
+
+    if (error) {
+        throw createGuestSupabaseError(
+            error,
+            "Não foi possível validar o grupo de convidados.",
+            "GUEST_GROUP_ACCESS_FAILED"
+        );
+    }
+    if (!data) {
+        throw createSupabaseAppError(
+            "O grupo não foi encontrado ou sua conta não possui mais acesso.",
+            "GUEST_GROUP_NOT_FOUND"
+        );
+    }
+    return String(data.id);
+}
+
+async function listGuestMembersWithClient(client, groupIds) {
+    if (!groupIds.length) return [];
+    const { data, error } = await client
+        .from("guest_members")
+        .select("*")
+        .in("guest_group_id", groupIds)
+        .order("sort_order", { ascending: true, nullsFirst: false })
+        .order("created_at", { ascending: true });
+
+    if (error) {
+        throw createGuestSupabaseError(
+            error,
+            "Não foi possível carregar os integrantes dos grupos.",
+            "GUEST_MEMBER_LIST_FAILED"
+        );
+    }
+    return Array.isArray(data) ? data.map(mapGuestMemberRow) : [];
+}
+
+async function listCurrentWeddingGuestGroups() {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    const { data, error } = await client
+        .from("guest_groups")
+        .select("*")
+        .eq("wedding_id", weddingId)
+        .order("is_system", { ascending: false })
+        .order("sort_order", { ascending: true, nullsFirst: false })
+        .order("created_at", { ascending: true });
+
+    if (error) {
+        throw createGuestSupabaseError(
+            error,
+            "Não foi possível carregar os convidados. Verifique sua conexão e tente novamente.",
+            "GUEST_GROUP_LIST_FAILED"
+        );
+    }
+
+    const guestGroups = Array.isArray(data) ? data.map(mapGuestGroupRowToLocal) : [];
+    const guestMembers = await listGuestMembersWithClient(client, guestGroups.map(group => group.id));
+    return { weddingId, guestGroups, guestMembers };
+}
+
+async function createCurrentWeddingGuestGroup(group) {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    const groupPayload = mapGuestGroupToDatabase(group);
+    const { data, error } = await client
+        .from("guest_groups")
+        .insert({ ...groupPayload, wedding_id: weddingId })
+        .select("*")
+        .maybeSingle();
+
+    if (error) {
+        throw createGuestSupabaseError(error, "Não foi possível criar o grupo de convidados.", "GUEST_GROUP_CREATE_FAILED");
+    }
+    if (!data) {
+        throw createSupabaseAppError("O grupo não foi criado. Verifique seu acesso ao casamento.", "GUEST_GROUP_CREATE_NOT_ALLOWED");
+    }
+    return mapGuestGroupRowToLocal(data);
+}
+
+async function updateCurrentWeddingGuestGroup(groupId, group) {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    const { data, error } = await client
+        .from("guest_groups")
+        .update(mapGuestGroupToDatabase(group))
+        .eq("id", groupId)
+        .eq("wedding_id", weddingId)
+        .select("*")
+        .maybeSingle();
+
+    if (error) {
+        throw createGuestSupabaseError(error, "Não foi possível atualizar o grupo.", "GUEST_GROUP_UPDATE_FAILED");
+    }
+    if (!data) {
+        throw createSupabaseAppError("O grupo não foi atualizado. Verifique se ele ainda existe.", "GUEST_GROUP_UPDATE_NOT_ALLOWED");
+    }
+    return mapGuestGroupRowToLocal(data);
+}
+
+async function updateCurrentWeddingGuestGroupClosed(groupId, isClosed) {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    const { data, error } = await client
+        .from("guest_groups")
+        .update({ is_closed: isClosed === true })
+        .eq("id", groupId)
+        .eq("wedding_id", weddingId)
+        .select("*")
+        .maybeSingle();
+
+    if (error) throw createGuestSupabaseError(error, "Não foi possível atualizar o estado do grupo.", "GUEST_GROUP_CLOSED_FAILED");
+    if (!data) throw createSupabaseAppError("O estado do grupo não foi atualizado.", "GUEST_GROUP_CLOSED_NOT_ALLOWED");
+    return mapGuestGroupRowToLocal(data);
+}
+
+async function updateCurrentWeddingGuestGroupNotes(groupId, notes) {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    const { data, error } = await client
+        .from("guest_groups")
+        .update({ notes: String(notes ?? "").trim() || null })
+        .eq("id", groupId)
+        .eq("wedding_id", weddingId)
+        .select("*")
+        .maybeSingle();
+
+    if (error) throw createGuestSupabaseError(error, "Não foi possível salvar a observação do grupo.", "GUEST_GROUP_NOTES_FAILED");
+    if (!data) throw createSupabaseAppError("A observação do grupo não foi salva.", "GUEST_GROUP_NOTES_NOT_ALLOWED");
+    return mapGuestGroupRowToLocal(data);
+}
+
+async function deleteCurrentWeddingGuestGroup(groupId) {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    const { data, error } = await client
+        .from("guest_groups")
+        .delete()
+        .eq("id", groupId)
+        .eq("wedding_id", weddingId)
+        .select("id")
+        .maybeSingle();
+
+    if (error) throw createGuestSupabaseError(error, "Não foi possível excluir o grupo.", "GUEST_GROUP_DELETE_FAILED");
+    if (!data) throw createSupabaseAppError("O grupo não foi excluído. Verifique se ele ainda existe.", "GUEST_GROUP_DELETE_NOT_ALLOWED");
+    return { id: String(data.id) };
+}
+
+async function createGuestMembers(groupId, members) {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    await requireCurrentWeddingGuestGroup(client, weddingId, groupId);
+    const rows = (Array.isArray(members) ? members : []).map(member => ({
+        ...mapGuestMemberToDatabase(member),
+        guest_group_id: groupId
+    }));
+    if (!rows.length) return [];
+
+    const { data, error } = await client.from("guest_members").insert(rows).select("*");
+    if (error) throw createGuestSupabaseError(error, "Não foi possível adicionar os integrantes.", "GUEST_MEMBER_CREATE_FAILED");
+    return Array.isArray(data) ? data.map(mapGuestMemberRow) : [];
+}
+
+async function updateGuestMember(groupId, memberId, member) {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    await requireCurrentWeddingGuestGroup(client, weddingId, groupId);
+    const { data, error } = await client
+        .from("guest_members")
+        .update(mapGuestMemberToDatabase(member))
+        .eq("id", memberId)
+        .eq("guest_group_id", groupId)
+        .select("*")
+        .maybeSingle();
+
+    if (error) throw createGuestSupabaseError(error, "Não foi possível atualizar o integrante.", "GUEST_MEMBER_UPDATE_FAILED");
+    if (!data) throw createSupabaseAppError("O integrante não foi atualizado.", "GUEST_MEMBER_UPDATE_NOT_ALLOWED");
+    return mapGuestMemberRow(data);
+}
+
+async function deleteGuestMember(groupId, memberId) {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    await requireCurrentWeddingGuestGroup(client, weddingId, groupId);
+    const { data, error } = await client
+        .from("guest_members")
+        .delete()
+        .eq("id", memberId)
+        .eq("guest_group_id", groupId)
+        .select("id")
+        .maybeSingle();
+
+    if (error) throw createGuestSupabaseError(error, "Não foi possível excluir o integrante.", "GUEST_MEMBER_DELETE_FAILED");
+    if (!data) throw createSupabaseAppError("O integrante não foi excluído.", "GUEST_MEMBER_DELETE_NOT_ALLOWED");
+    return { id: String(data.id) };
+}
+
+async function replaceOrSyncGuestGroupMembers(groupId, desiredMembers, currentMembers = null) {
+    const client = await getSupabaseClient();
+    const { weddingId } = await resolveCurrentWeddingContext();
+    await requireCurrentWeddingGuestGroup(client, weddingId, groupId);
+    const existing = Array.isArray(currentMembers)
+        ? currentMembers
+        : await listGuestMembersWithClient(client, [groupId]);
+    const existingById = new Map(existing.map(member => [member.id, member]));
+    const desired = Array.isArray(desiredMembers) ? desiredMembers : [];
+    const retainedIds = new Set();
+    const newMembers = [];
+
+    for (const member of desired) {
+        const memberId = String(member?.id ?? "");
+        if (!memberId || !existingById.has(memberId)) {
+            newMembers.push(member);
+            continue;
+        }
+        retainedIds.add(memberId);
+        if (!guestMemberPayloadChanged(existingById.get(memberId), member)) continue;
+        const { data, error } = await client
+            .from("guest_members")
+            .update(mapGuestMemberToDatabase(member))
+            .eq("id", memberId)
+            .eq("guest_group_id", groupId)
+            .select("id")
+            .maybeSingle();
+        if (error) throw createGuestSupabaseError(error, "Não foi possível sincronizar os integrantes.", "GUEST_MEMBER_SYNC_UPDATE_FAILED");
+        if (!data) {
+            retainedIds.delete(memberId);
+            newMembers.push({ ...member, id: null });
+        }
+    }
+
+    if (newMembers.length) {
+        const rows = newMembers.map(member => ({ ...mapGuestMemberToDatabase(member), guest_group_id: groupId }));
+        const { error } = await client.from("guest_members").insert(rows);
+        if (error) throw createGuestSupabaseError(error, "Não foi possível sincronizar os novos integrantes.", "GUEST_MEMBER_SYNC_INSERT_FAILED");
+    }
+
+    const removedIds = existing.filter(member => !retainedIds.has(member.id)).map(member => member.id);
+    if (removedIds.length) {
+        const { error } = await client
+            .from("guest_members")
+            .delete()
+            .eq("guest_group_id", groupId)
+            .in("id", removedIds);
+        if (error) throw createGuestSupabaseError(error, "Não foi possível remover os integrantes excluídos.", "GUEST_MEMBER_SYNC_DELETE_FAILED");
+    }
+
+    return listGuestMembersWithClient(client, [groupId]);
+}
+
 Object.assign(globalThis, {
     listCurrentWeddingVenues,
     createCurrentWeddingVenue,
     updateCurrentWeddingVenue,
     updateCurrentWeddingVenueFavorite,
     deleteCurrentWeddingVenue,
+    mapGuestGroupRowToLocal,
+    mapGuestGroupToDatabase,
+    mapGuestMemberRow,
+    mapGuestMemberToDatabase,
+    listCurrentWeddingGuestGroups,
+    createCurrentWeddingGuestGroup,
+    updateCurrentWeddingGuestGroup,
+    updateCurrentWeddingGuestGroupClosed,
+    updateCurrentWeddingGuestGroupNotes,
+    deleteCurrentWeddingGuestGroup,
+    createGuestMembers,
+    updateGuestMember,
+    deleteGuestMember,
+    replaceOrSyncGuestGroupMembers,
     signOutCurrentUser
 });
 

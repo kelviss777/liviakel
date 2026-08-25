@@ -170,6 +170,7 @@ function normalizeCouple(couple, prefix = "couple", includeChildren = true) {
         firstPerson: normalizeAdultPerson(firstPersonValue, `${id}-first`),
         secondPerson: normalizeAdultPerson(secondPersonValue, `${id}-second`)
     };
+    if (cleanGuestText(couple?.householdId)) normalized.householdId = cleanGuestText(couple.householdId);
     if (includeChildren) {
         normalized.children = (Array.isArray(couple?.children) ? couple.children : [])
             .map(child => normalizeCoupleChild(child, id))
@@ -366,7 +367,7 @@ function getAllGuestPeople(groups = []) {
                     ...(couple.firstPerson || { name: couple.firstPersonName }),
                     isChild: false,
                     pairId: couple.id,
-                    householdId: couple.id,
+                    householdId: couple.householdId || couple.id,
                     memberType: "godparent_couple",
                     ...context
                 },
@@ -374,7 +375,7 @@ function getAllGuestPeople(groups = []) {
                     ...(couple.secondPerson || { name: couple.secondPersonName }),
                     isChild: false,
                     pairId: couple.id,
-                    householdId: couple.id,
+                    householdId: couple.householdId || couple.id,
                     memberType: "godparent_couple",
                     ...context
                 }
@@ -396,7 +397,7 @@ function getAllGuestPeople(groups = []) {
                     ...(couple.firstPerson || { name: couple.firstPersonName }),
                     isChild: false,
                     pairId: couple.id,
-                    householdId: couple.id,
+                    householdId: couple.householdId || couple.id,
                     memberType: "couple_adult",
                     ...context
                 },
@@ -404,7 +405,7 @@ function getAllGuestPeople(groups = []) {
                     ...(couple.secondPerson || { name: couple.secondPersonName }),
                     isChild: false,
                     pairId: couple.id,
-                    householdId: couple.id,
+                    householdId: couple.householdId || couple.id,
                     memberType: "couple_adult",
                     ...context
                 },
@@ -412,7 +413,7 @@ function getAllGuestPeople(groups = []) {
                     ...child,
                     isChild: true,
                     pairId: null,
-                    householdId: couple.id,
+                    householdId: couple.householdId || couple.id,
                     memberType: "couple_child",
                     ...context
                 }))
@@ -427,6 +428,142 @@ function getAllGuestPeople(groups = []) {
             ...context
         }));
     });
+}
+
+function isDatabaseUuid(value) {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(cleanGuestText(value));
+}
+
+function createGuestDatabaseUuid() {
+    if (!globalThis.crypto?.randomUUID) {
+        throw new Error("Este navegador não oferece geração segura de UUID para os vínculos dos convidados.");
+    }
+    return globalThis.crypto.randomUUID();
+}
+
+function sortGuestMemberRows(rows) {
+    return [...(Array.isArray(rows) ? rows : [])].sort((left, right) => {
+        const leftOrder = Number.isFinite(left.sortOrder) ? left.sortOrder : Number.MAX_SAFE_INTEGER;
+        const rightOrder = Number.isFinite(right.sortOrder) ? right.sortOrder : Number.MAX_SAFE_INTEGER;
+        if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+        return cleanGuestText(left.createdAt).localeCompare(cleanGuestText(right.createdAt));
+    });
+}
+
+function rebuildGuestGroupsFromRows(groupRows, memberRows) {
+    const membersByGroup = new Map();
+    sortGuestMemberRows(memberRows).forEach(member => {
+        const groupId = cleanGuestText(member.guestGroupId);
+        if (!membersByGroup.has(groupId)) membersByGroup.set(groupId, []);
+        membersByGroup.get(groupId).push(member);
+    });
+
+    return sortGuestGroups((Array.isArray(groupRows) ? groupRows : []).map(groupRow => {
+        const group = { ...groupRow, members: [], couples: [], individuals: [] };
+        const rows = membersByGroup.get(cleanGuestText(group.id)) || [];
+
+        if (group.category === "family" || group.category === "individual_group") {
+            group.members = rows
+                .filter(member => member.memberType === (group.category === "family" ? "family_member" : "individual_guest"))
+                .map(member => ({ id: member.id, name: member.name, notes: member.notes, isChild: member.isChild }));
+        } else if (group.category === "godparents") {
+            const couplesByPair = new Map();
+            rows.filter(member => member.memberType === "godparent_couple" && member.pairId).forEach(member => {
+                if (!couplesByPair.has(member.pairId)) couplesByPair.set(member.pairId, []);
+                couplesByPair.get(member.pairId).push(member);
+            });
+            group.couples = [...couplesByPair.entries()].flatMap(([pairId, adults]) => adults.length < 2 ? [] : [{
+                id: pairId,
+                householdId: adults[0].householdId || pairId,
+                firstPerson: { id: adults[0].id, name: adults[0].name, notes: adults[0].notes },
+                secondPerson: { id: adults[1].id, name: adults[1].name, notes: adults[1].notes }
+            }]);
+            group.individuals = rows
+                .filter(member => member.memberType === "godparent_individual")
+                .map(member => ({ id: member.id, name: member.name, notes: member.notes }));
+        } else if (group.category === "couples") {
+            const couplesByPair = new Map();
+            rows.filter(member => member.memberType === "couple_adult" && member.pairId).forEach(member => {
+                if (!couplesByPair.has(member.pairId)) couplesByPair.set(member.pairId, []);
+                couplesByPair.get(member.pairId).push(member);
+            });
+            const childrenByHousehold = new Map();
+            rows.filter(member => member.memberType === "couple_child" && member.householdId).forEach(member => {
+                if (!childrenByHousehold.has(member.householdId)) childrenByHousehold.set(member.householdId, []);
+                childrenByHousehold.get(member.householdId).push(member);
+            });
+            group.couples = [...couplesByPair.entries()].flatMap(([pairId, adults]) => {
+                if (adults.length < 2) return [];
+                const householdId = adults[0].householdId || adults[1].householdId || pairId;
+                return [{
+                    id: pairId,
+                    householdId,
+                    firstPerson: { id: adults[0].id, name: adults[0].name, notes: adults[0].notes },
+                    secondPerson: { id: adults[1].id, name: adults[1].name, notes: adults[1].notes },
+                    children: (childrenByHousehold.get(householdId) || []).map(child => ({
+                        id: child.id,
+                        name: child.name,
+                        notes: child.notes,
+                        isChild: true
+                    }))
+                }];
+            });
+        }
+
+        return normalizeStructuredGroup(group);
+    }));
+}
+
+function flattenGuestGroupMembersForDatabase(group, uuidFactory = createGuestDatabaseUuid) {
+    const rows = [];
+    let sortOrder = 0;
+    const addMember = (person, memberType, { pairId = null, householdId = null, isChild = false } = {}) => {
+        const row = {
+            name: cleanGuestText(person?.name),
+            notes: cleanGuestText(person?.notes),
+            isChild: isChild === true || person?.isChild === true,
+            memberType,
+            pairId,
+            householdId,
+            sortOrder: sortOrder++
+        };
+        if (isDatabaseUuid(person?.id)) row.id = person.id;
+        rows.push(row);
+    };
+
+    if (group.category === "family" || group.category === "individual_group") {
+        (group.members || []).forEach(member => addMember(
+            member,
+            group.category === "family" ? "family_member" : "individual_guest"
+        ));
+    } else if (group.category === "godparents") {
+        (group.couples || []).forEach(couple => {
+            const pairId = isDatabaseUuid(couple.id) ? couple.id : uuidFactory();
+            const householdId = isDatabaseUuid(couple.householdId) ? couple.householdId : uuidFactory();
+            addMember(couple.firstPerson, "godparent_couple", { pairId, householdId });
+            addMember(couple.secondPerson, "godparent_couple", { pairId, householdId });
+        });
+        (group.individuals || []).forEach(member => addMember(member, "godparent_individual"));
+    } else if (group.category === "couples") {
+        (group.couples || []).forEach(couple => {
+            const pairId = isDatabaseUuid(couple.id) ? couple.id : uuidFactory();
+            const householdId = isDatabaseUuid(couple.householdId) ? couple.householdId : uuidFactory();
+            addMember(couple.firstPerson, "couple_adult", { pairId, householdId });
+            addMember(couple.secondPerson, "couple_adult", { pairId, householdId });
+            (couple.children || []).forEach(child => addMember(child, "couple_child", { householdId, isChild: true }));
+        });
+    }
+
+    return rows.filter(row => row.name);
+}
+
+function getGuestMigrationIdentity(group) {
+    if (group?.systemKey === "godparents" || group?.category === "godparents") return "system:godparents";
+    return [
+        comparableGuestText(group?.category),
+        normalizeGuestNameForComparison(group?.name),
+        normalizeGuestNameForComparison(group?.relationshipGroup)
+    ].join(":");
 }
 
 function getPeopleInGroup(group) {
@@ -700,6 +837,163 @@ let groupNotesGroupId = null;
 let groupNotesReturnFocus = null;
 let completeListReturnFocus = null;
 let wizardState = createWizardState();
+let guestsLoading = true;
+let guestSaveInProgress = false;
+const guestGroupsInProgress = new Set();
+
+function getGuestApiFunction(name) {
+    const operation = globalThis[name];
+    if (typeof operation !== "function") {
+        throw new Error("A integração de convidados não foi carregada. Atualize a página e tente novamente.");
+    }
+    return operation;
+}
+
+function callGuestApi(name, ...args) {
+    return getGuestApiFunction(name)(...args);
+}
+
+function reportGuestOperationError(message, error) {
+    console.error(message, error);
+    showToast(error?.code === "GUEST_PERMISSION_DENIED"
+        ? error.message
+        : message);
+}
+
+function setGuestGroupBusy(groupId, busy) {
+    if (busy) guestGroupsInProgress.add(groupId);
+    else guestGroupsInProgress.delete(groupId);
+    guestListElement.querySelectorAll("[data-id]").forEach(control => {
+        if (control.dataset.id === String(groupId)) control.disabled = busy;
+    });
+    if (currentDetailsGroupId === groupId) {
+        ["details-toggle-closed", "details-edit", "details-delete"].forEach(id => {
+            document.querySelector(`#${id}`).disabled = busy;
+        });
+        detailsDialog.setAttribute("aria-busy", String(busy));
+    }
+}
+
+async function reloadGuestStateFromSupabase() {
+    const result = await callGuestApi("listCurrentWeddingGuestGroups");
+    state.guests = rebuildGuestGroupsFromRows(result.guestGroups, result.guestMembers);
+    return result;
+}
+
+async function createRemoteGuestGroupWithMembers(group) {
+    const createdGroup = await callGuestApi("createCurrentWeddingGuestGroup", group);
+    try {
+        const members = flattenGuestGroupMembersForDatabase(group);
+        if (members.length) await callGuestApi("createGuestMembers", createdGroup.id, members);
+    } catch (error) {
+        try {
+            await callGuestApi("deleteCurrentWeddingGuestGroup", createdGroup.id);
+        } catch (compensationError) {
+            console.error("Falha ao remover o grupo criado após erro nos integrantes.", compensationError);
+        }
+        throw error;
+    }
+    return createdGroup;
+}
+
+function mergeGodparentsForMigration(remoteGroup, localGroup) {
+    const merged = normalizeStructuredGroup(remoteGroup);
+    const individualNames = new Set(merged.individuals.map(person => normalizeGuestNameForComparison(person.name)));
+    (localGroup.individuals || []).forEach(person => {
+        const key = normalizeGuestNameForComparison(person.name);
+        if (key && !individualNames.has(key)) {
+            merged.individuals.push(person);
+            individualNames.add(key);
+        }
+    });
+    const coupleNames = new Set(merged.couples.map(couple => [
+        normalizeGuestNameForComparison(couple.firstPerson.name),
+        normalizeGuestNameForComparison(couple.secondPerson.name)
+    ].sort().join("|")));
+    (localGroup.couples || []).forEach(couple => {
+        const key = [
+            normalizeGuestNameForComparison(couple.firstPerson.name),
+            normalizeGuestNameForComparison(couple.secondPerson.name)
+        ].sort().join("|");
+        if (key && !coupleNames.has(key)) {
+            merged.couples.push(couple);
+            coupleNames.add(key);
+        }
+    });
+    return merged;
+}
+
+async function migrateLegacyGuests({ weddingId, guestGroups, guestMembers }, legacyGuests) {
+    const markerKey = `nosso-casamento-guests-migrated:${weddingId}`;
+    const backupKey = `nosso-casamento-guests-backup:${weddingId}`;
+    if (localStorage.getItem(markerKey)) return false;
+
+    const rawLegacy = Array.isArray(legacyGuests) ? legacyGuests : [];
+    if (rawLegacy.length && !localStorage.getItem(backupKey)) {
+        localStorage.setItem(backupKey, JSON.stringify(rawLegacy));
+    }
+    const localGroups = normalizeGuestGroups(rawLegacy);
+    let remoteGroups = rebuildGuestGroupsFromRows(guestGroups, guestMembers);
+    const remoteByIdentity = new Map(remoteGroups.map(group => [getGuestMigrationIdentity(group), group]));
+
+    for (const localGroup of localGroups) {
+        const identity = getGuestMigrationIdentity(localGroup);
+        const existing = remoteByIdentity.get(identity);
+        if (existing) {
+            if (identity === "system:godparents") {
+                const merged = mergeGodparentsForMigration(existing, localGroup);
+                if (countGroupPeople(existing) === 0) {
+                    merged.notes = existing.notes || localGroup.notes;
+                    merged.isClosed = existing.isClosed || localGroup.isClosed;
+                    await callGuestApi("updateCurrentWeddingGuestGroup", existing.id, merged);
+                }
+                await callGuestApi(
+                    "replaceOrSyncGuestGroupMembers",
+                    existing.id,
+                    flattenGuestGroupMembersForDatabase(merged)
+                );
+            }
+            continue;
+        }
+
+        const created = await createRemoteGuestGroupWithMembers(localGroup);
+        remoteGroups.push({ ...localGroup, id: created.id });
+        remoteByIdentity.set(identity, { ...localGroup, id: created.id });
+    }
+
+    localStorage.setItem(markerKey, new Date().toISOString());
+    return localGroups.length > 0;
+}
+
+async function initializeGuests() {
+    guestsLoading = true;
+    state.guests = [];
+    renderAll();
+    try {
+        let result = await reloadGuestStateFromSupabase();
+        try {
+            const legacyGuests = typeof loadLegacyGuests === "function" ? loadLegacyGuests() : [];
+            const migrated = await migrateLegacyGuests(result, legacyGuests);
+            if (migrated) {
+                result = await reloadGuestStateFromSupabase();
+                showToast("Convidados antigos migrados com segurança.");
+            }
+        } catch (migrationError) {
+            reportGuestOperationError("Não foi possível concluir a migração dos convidados antigos.", migrationError);
+            try {
+                await reloadGuestStateFromSupabase();
+            } catch (reloadError) {
+                console.error("Não foi possível recarregar os convidados após a falha de migração.", reloadError);
+            }
+        }
+    } catch (error) {
+        state.guests = [];
+        reportGuestOperationError("Não foi possível carregar os convidados. Tente novamente.", error);
+    } finally {
+        guestsLoading = false;
+        renderAll();
+    }
+}
 
 function createWizardState() {
     return {
@@ -856,6 +1150,20 @@ function renderGuestCard(group) {
 }
 
 function renderGuests() {
+    guestListElement.setAttribute("aria-busy", String(guestsLoading));
+    ["open-guest-wizard", "open-complete-guest-list", "export-guests"].forEach(id => {
+        document.querySelector(`#${id}`).disabled = guestsLoading;
+    });
+    if (guestsLoading) {
+        document.querySelector("#guest-results-meta").textContent = "";
+        guestListElement.innerHTML = `
+            <div class="guest-empty" role="status">
+                <span aria-hidden="true">♡</span>
+                <h2>Carregando convidados...</h2>
+                <p>Estamos buscando a lista deste casamento.</p>
+            </div>`;
+        return;
+    }
     const visibleGroups = sortGuestGroups(filterGuestGroups(
         state.guests,
         guestSearch.value,
@@ -1207,7 +1515,8 @@ function showDraftValidation(errors) {
 }
 
 function updateWizardNextState() {
-    if (wizardState.step === 1) wizardNext.disabled = !wizardState.draft.category;
+    if (guestSaveInProgress) wizardNext.disabled = true;
+    else if (wizardState.step === 1) wizardNext.disabled = !wizardState.draft.category;
     else if (wizardState.step === 2) wizardNext.disabled = Object.keys(getDraftValidation()).length > 0;
     else wizardNext.disabled = false;
 }
@@ -1285,6 +1594,7 @@ function closeGuestWizard() {
 }
 
 function requestCloseGuestWizard() {
+    if (guestSaveInProgress) return;
     if (!wizardState.dirty) {
         closeGuestWizard();
         return;
@@ -1609,56 +1919,96 @@ function focusDuplicateCandidateForReview(candidate) {
     });
 }
 
-function commitGuestDraft(savedGroup) {
-    if (wizardState.mode === "edit") {
-        state.guests = state.guests.filter(group => group.id !== wizardState.editingId);
-        const mergeTarget = savedGroup.systemKey
-            ? findGuestSystemGroup(state.guests, savedGroup.systemKey)
-            : savedGroup.category === "individual_group"
-            ? state.guests.find(group => group.category === "individual_group" && comparableGuestText(group.name) === comparableGuestText(savedGroup.name))
-            : null;
-        if (mergeTarget) {
-            appendUniqueGuestEntries(mergeTarget.members, savedGroup.members);
-            appendUniqueGuestEntries(mergeTarget.couples, savedGroup.couples);
-            appendUniqueGuestEntries(mergeTarget.individuals, savedGroup.individuals);
-            mergeTarget.isClosed = mergeTarget.isClosed || savedGroup.isClosed;
-            mergeTarget.notes = savedGroup.notes || mergeTarget.notes;
-        } else {
-            state.guests.push(savedGroup);
-        }
-    } else if (["godparents", "couples"].includes(savedGroup.category)) {
-        const existing = savedGroup.systemKey
-            ? findGuestSystemGroup(state.guests, savedGroup.systemKey)
-            : state.guests.find(group => group.category === savedGroup.category);
-        if (existing) {
-            appendUniqueGuestEntries(existing.couples, savedGroup.couples);
-            appendUniqueGuestEntries(existing.individuals, savedGroup.individuals);
-            existing.notes = savedGroup.notes || existing.notes;
-        } else {
-            state.guests.unshift(savedGroup);
-        }
-    } else if (savedGroup.category === "individual_group") {
-        const existing = state.guests.find(group => group.category === "individual_group" && comparableGuestText(group.name) === comparableGuestText(savedGroup.name));
-        if (existing) {
-            appendUniqueGuestEntries(existing.members, savedGroup.members);
-            existing.notes = savedGroup.notes || existing.notes;
-        } else state.guests.unshift(savedGroup);
-    } else {
-        state.guests.unshift(savedGroup);
+function findGuestDraftMergeTarget(savedGroup) {
+    if (savedGroup.systemKey) return findGuestSystemGroup(state.guests, savedGroup.systemKey);
+    if (savedGroup.category === "couples") return state.guests.find(group => group.category === "couples");
+    if (savedGroup.category === "individual_group") {
+        return state.guests.find(group =>
+            group.category === "individual_group" &&
+            comparableGuestText(group.name) === comparableGuestText(savedGroup.name)
+        );
     }
+    return null;
+}
 
-    saveState();
-    renderAll();
-    wizardState.dirty = false;
-    closePageDialog(wizardDialog);
-    wizardReturnFocus?.focus?.();
-    showToast(wizardState.mode === "edit" ? "Alterações salvas." : "Convidados adicionados à lista.");
+function mergeGuestDraftIntoGroup(target, addition) {
+    const merged = structuredClone(target);
+    appendUniqueGuestEntries(merged.members, addition.members);
+    appendUniqueGuestEntries(merged.couples, addition.couples);
+    appendUniqueGuestEntries(merged.individuals, addition.individuals);
+    merged.notes = addition.notes || merged.notes;
+    return normalizeStructuredGroup(merged);
+}
+
+async function commitGuestDraft(savedGroup) {
+    if (guestSaveInProgress) return;
+    guestSaveInProgress = true;
+    wizardDialog.setAttribute("aria-busy", "true");
+    const wizardControls = [...wizardDialog.querySelectorAll("button, input, select, textarea")];
+    const originalDisabledStates = wizardControls.map(control => control.disabled);
+    wizardControls.forEach(control => { control.disabled = true; });
+    const previousLabel = wizardNext.textContent;
+    wizardNext.textContent = "Salvando...";
+
+    try {
+        if (wizardState.mode === "edit") {
+            const currentGroup = state.guests.find(group => group.id === wizardState.editingId);
+            if (!currentGroup) throw new Error("O grupo que estava sendo editado não foi encontrado.");
+            await callGuestApi("updateCurrentWeddingGuestGroup", currentGroup.id, savedGroup);
+            await callGuestApi(
+                "replaceOrSyncGuestGroupMembers",
+                currentGroup.id,
+                flattenGuestGroupMembersForDatabase(savedGroup),
+                flattenGuestGroupMembersForDatabase(currentGroup)
+            );
+        } else {
+            const mergeTarget = findGuestDraftMergeTarget(savedGroup);
+            if (mergeTarget) {
+                const merged = mergeGuestDraftIntoGroup(mergeTarget, savedGroup);
+                await callGuestApi("updateCurrentWeddingGuestGroup", mergeTarget.id, merged);
+                await callGuestApi(
+                    "replaceOrSyncGuestGroupMembers",
+                    mergeTarget.id,
+                    flattenGuestGroupMembersForDatabase(merged),
+                    flattenGuestGroupMembersForDatabase(mergeTarget)
+                );
+            } else {
+                await createRemoteGuestGroupWithMembers(savedGroup);
+            }
+        }
+
+        await reloadGuestStateFromSupabase();
+        renderAll();
+        wizardState.dirty = false;
+        closePageDialog(wizardDialog);
+        wizardReturnFocus?.focus?.();
+        showToast(wizardState.mode === "edit" ? "Alterações salvas." : "Convidados adicionados à lista.");
+    } catch (error) {
+        reportGuestOperationError(
+            wizardState.mode === "edit"
+                ? "Não foi possível atualizar o grupo. Tente novamente."
+                : "Não foi possível salvar os convidados. Tente novamente.",
+            error
+        );
+        try {
+            await reloadGuestStateFromSupabase();
+            renderAll();
+        } catch (reloadError) {
+            console.error("Não foi possível recarregar os convidados após a falha.", reloadError);
+        }
+    } finally {
+        guestSaveInProgress = false;
+        wizardDialog.removeAttribute("aria-busy");
+        wizardControls.forEach((control, index) => { control.disabled = originalDisabledStates[index]; });
+        wizardNext.textContent = previousLabel;
+        updateWizardNextState();
+    }
 }
 
 function saveGuestDraft() {
     const savedGroup = normalizeStructuredGroup(wizardState.draft);
     const candidates = getFinalDuplicateCandidates(savedGroup);
-    const operation = () => commitGuestDraft(savedGroup);
+    const operation = () => void commitGuestDraft(savedGroup);
 
     if (!candidates.length) {
         operation();
@@ -1751,25 +2101,42 @@ function openGroupNotesDialog(groupId, trigger) {
     requestAnimationFrame(() => document.querySelector("#group-notes-input").focus());
 }
 
-function closeGroupNotesDialog() {
+function closeGroupNotesDialog(force = false) {
+    if (!force && groupNotesGroupId && guestGroupsInProgress.has(groupNotesGroupId)) return;
     closePageDialog(groupNotesDialog);
     groupNotesGroupId = null;
     groupNotesReturnFocus?.focus?.();
 }
 
-function saveGroupNotes() {
-    const group = updateGuestGroupNotes(state.guests, groupNotesGroupId, document.querySelector("#group-notes-input").value);
-    if (!group) return;
-    const savedGroupId = group.id;
-    const previousFocus = groupNotesReturnFocus;
-    saveState();
-    closePageDialog(groupNotesDialog);
-    groupNotesGroupId = null;
-    renderAll();
-    const replacementFocus = [...guestListElement.querySelectorAll('[data-action="edit-group-notes"]')]
-        .find(button => button.dataset.id === savedGroupId);
-    focusControlNaturally(replacementFocus || (previousFocus?.isConnected ? previousFocus : null));
-    showToast(group.notes ? "Observação do grupo salva." : "Observação do grupo removida.");
+async function saveGroupNotes() {
+    const group = state.guests.find(item => item.id === groupNotesGroupId);
+    if (!group || guestGroupsInProgress.has(group.id)) return;
+    const notes = cleanGuestText(document.querySelector("#group-notes-input").value);
+    const saveButton = document.querySelector("#save-group-notes");
+    const previousLabel = saveButton.textContent;
+    guestGroupsInProgress.add(group.id);
+    saveButton.disabled = true;
+    saveButton.textContent = "Salvando...";
+    groupNotesDialog.setAttribute("aria-busy", "true");
+    try {
+        const updated = await callGuestApi("updateCurrentWeddingGuestGroupNotes", group.id, notes);
+        group.notes = updated.notes;
+        const savedGroupId = group.id;
+        const previousFocus = groupNotesReturnFocus;
+        closeGroupNotesDialog(true);
+        renderAll();
+        const replacementFocus = [...guestListElement.querySelectorAll('[data-action="edit-group-notes"]')]
+            .find(button => button.dataset.id === savedGroupId);
+        focusControlNaturally(replacementFocus || (previousFocus?.isConnected ? previousFocus : null));
+        showToast(group.notes ? "Observação do grupo salva." : "Observação do grupo removida.");
+    } catch (error) {
+        reportGuestOperationError("Não foi possível salvar a observação do grupo.", error);
+    } finally {
+        guestGroupsInProgress.delete(group.id);
+        saveButton.disabled = false;
+        saveButton.textContent = previousLabel;
+        groupNotesDialog.removeAttribute("aria-busy");
+    }
 }
 
 function renderCompleteListGroup(group) {
@@ -1831,13 +2198,21 @@ function closeCompleteGuestList(restoreFocus = true) {
     if (restoreFocus) completeListReturnFocus?.focus?.();
 }
 
-function toggleGuestGroup(groupId) {
+async function toggleGuestGroup(groupId) {
     const group = state.guests.find(item => item.id === groupId);
-    if (!group) return;
-    group.isClosed = !group.isClosed;
-    saveState();
-    renderAll();
-    showToast(group.isClosed ? `“${group.name}” foi fechado.` : `“${group.name}” foi reaberto.`);
+    if (!group || guestGroupsInProgress.has(group.id)) return;
+    const nextState = !group.isClosed;
+    setGuestGroupBusy(group.id, true);
+    try {
+        const updated = await callGuestApi("updateCurrentWeddingGuestGroupClosed", group.id, nextState);
+        group.isClosed = updated.isClosed;
+        renderAll();
+        showToast(group.isClosed ? `“${group.name}” foi fechado.` : `“${group.name}” foi reaberto.`);
+    } catch (error) {
+        reportGuestOperationError("Não foi possível atualizar o estado do grupo.", error);
+    } finally {
+        setGuestGroupBusy(group.id, false);
+    }
 }
 
 function openGuestConfirmation({ title, message, detail, acceptLabel, onAccept, returnFocus }) {
@@ -1852,6 +2227,7 @@ function openGuestConfirmation({ title, message, detail, acceptLabel, onAccept, 
 }
 
 function closeGuestConfirmation() {
+    if (confirmDialog.getAttribute("aria-busy") === "true") return;
     pendingConfirmation = null;
     closePageDialog(confirmDialog);
     confirmationReturnFocus?.focus?.();
@@ -1866,21 +2242,45 @@ function requestDeleteGuestGroup(groupId, trigger) {
         detail: "Todos os integrantes desse grupo serão removidos da lista.",
         acceptLabel: "Excluir grupo",
         returnFocus: trigger,
-        onAccept: () => {
-            state.guests = state.guests.filter(item => item.id !== group.id);
-            saveState();
+        onAccept: async () => {
+            if (group.systemKey === "godparents" || group.category === "godparents") {
+                await callGuestApi("replaceOrSyncGuestGroupMembers", group.id, [], flattenGuestGroupMembersForDatabase(group));
+            } else {
+                await callGuestApi("deleteCurrentWeddingGuestGroup", group.id);
+            }
+            await reloadGuestStateFromSupabase();
             if (detailsDialog.open) closeGuestDetails();
             renderAll();
-            showToast("Grupo excluído com sucesso.");
+            showToast(group.systemKey === "godparents" || group.category === "godparents"
+                ? "Integrantes de Padrinhos & Madrinhas removidos."
+                : "Grupo excluído com sucesso.");
         }
     });
 }
 
-function confirmGuestAction() {
+async function confirmGuestAction() {
     const action = pendingConfirmation;
-    pendingConfirmation = null;
-    closePageDialog(confirmDialog);
-    action?.();
+    if (!action || confirmDialog.getAttribute("aria-busy") === "true") return;
+    const acceptButton = document.querySelector("#confirm-accept");
+    const cancelButton = document.querySelector("#confirm-cancel");
+    const previousLabel = acceptButton.textContent;
+    confirmDialog.setAttribute("aria-busy", "true");
+    acceptButton.disabled = true;
+    cancelButton.disabled = true;
+    acceptButton.textContent = "Aguarde...";
+    try {
+        await action();
+        pendingConfirmation = null;
+        confirmDialog.removeAttribute("aria-busy");
+        closePageDialog(confirmDialog);
+    } catch (error) {
+        reportGuestOperationError("Não foi possível excluir o grupo.", error);
+    } finally {
+        confirmDialog.removeAttribute("aria-busy");
+        acceptButton.disabled = false;
+        cancelButton.disabled = false;
+        acceptButton.textContent = previousLabel;
+    }
 }
 
 function formatWeddingDateForPrint(value) {
@@ -2138,5 +2538,4 @@ duplicateDialog.addEventListener("cancel", event => { event.preventDefault(); cl
 duplicateDialog.addEventListener("click", event => { if (event.target === duplicateDialog) closeGuestDuplicateDialog(true); });
 window.addEventListener("beforeprint", renderGuestPrintView);
 
-state.guests = normalizeGuestGroups(state.guests);
-renderAll();
+void initializeGuests();
