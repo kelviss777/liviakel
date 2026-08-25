@@ -9,6 +9,7 @@ const guestSource = fs.readFileSync(path.join(projectRoot, "pages", "convidados"
 const guestHtml = fs.readFileSync(path.join(projectRoot, "pages", "convidados", "index.html"), "utf8");
 const guestCss = fs.readFileSync(path.join(projectRoot, "pages", "convidados", "style.css"), "utf8");
 const guestDocumentation = fs.readFileSync(path.join(projectRoot, "DOCUMENTACAO-CONVIDADOS.md"), "utf8");
+const supabaseSource = fs.readFileSync(path.join(projectRoot, "js", "supabase.js"), "utf8");
 const guestLogicSource = guestSource.slice(0, guestSource.indexOf("const guestListElement"));
 
 function loadGuestLogic() {
@@ -31,6 +32,98 @@ function loadGuestLogic() {
 
 function read(context, expression) {
     return JSON.parse(JSON.stringify(vm.runInContext(expression, context)));
+}
+
+function loadGuestSupabaseLogic() {
+    const context = vm.createContext({
+        console,
+        URL,
+        Object,
+        Number,
+        String,
+        Boolean,
+        Set,
+        Map,
+        Error,
+        window: { supabase: { createClient() { return {}; } } },
+        document: { createElement: () => ({}), head: { appendChild() {} } }
+    });
+    vm.runInContext(supabaseSource, context);
+    return context;
+}
+
+function createGuestSupabaseClient({ groupRows = [], memberRows = [], errors = {} } = {}) {
+    const calls = [];
+    let generatedMember = 0;
+    const clone = value => value === undefined ? undefined : structuredClone(value);
+
+    function builderFor(table) {
+        const query = { table, operation: "list", payload: null, filters: [], inFilters: [], orders: [] };
+        const builder = {
+            select() { return this; },
+            insert(payload) { query.operation = "insert"; query.payload = clone(payload); return this; },
+            update(payload) { query.operation = "update"; query.payload = clone(payload); return this; },
+            delete() { query.operation = "delete"; return this; },
+            eq(column, value) { query.filters.push({ column, value }); return this; },
+            in(column, values) { query.inFilters.push({ column, values: clone(values) }); return this; },
+            order(column, options) { query.orders.push({ column, options: clone(options) }); return this; },
+            async maybeSingle() {
+                calls.push(clone(query));
+                const error = errors[`${table}:${query.operation}`] || null;
+                if (error) return { data: null, error };
+                const id = query.filters.find(filter => filter.column === "id")?.value;
+                if (table === "guest_groups" && query.operation === "insert") {
+                    return { data: { id: "11111111-1111-4111-8111-111111111111", ...clone(query.payload) }, error: null };
+                }
+                if (table === "guest_groups" && query.operation === "update") {
+                    return { data: { ...(groupRows.find(row => row.id === id) || {}), id, ...clone(query.payload) }, error: null };
+                }
+                if (query.operation === "delete") return { data: { id }, error: null };
+                const rows = table === "guest_groups" ? groupRows : memberRows;
+                return { data: clone(rows.find(row => row.id === id) || null), error: null };
+            },
+            then(resolve, reject) {
+                calls.push(clone(query));
+                const error = errors[`${table}:${query.operation}`] || null;
+                if (error) return Promise.resolve({ data: null, error }).then(resolve, reject);
+                let data;
+                if (query.operation === "insert") {
+                    const payloads = Array.isArray(query.payload) ? query.payload : [query.payload];
+                    data = payloads.map(payload => ({ id: `member-${++generatedMember}`, ...clone(payload) }));
+                } else {
+                    data = clone(table === "guest_groups" ? groupRows : memberRows);
+                }
+                return Promise.resolve({ data, error: null }).then(resolve, reject);
+            }
+        };
+        return builder;
+    }
+
+    return {
+        calls,
+        auth: { async getUser() { return { data: { user: { id: "user-1" } }, error: null }; } },
+        from(table) {
+            if (table === "wedding_members") {
+                return {
+                    select() { return this; },
+                    eq() { return this; },
+                    async limit() { return { data: [{ wedding_id: "wedding-1" }], error: null }; }
+                };
+            }
+            if (["guest_groups", "guest_members"].includes(table)) return builderFor(table);
+            throw new Error(`Tabela inesperada: ${table}`);
+        }
+    };
+}
+
+function loadGuestSupabaseWithClient(client) {
+    const context = vm.createContext({
+        console, URL, Object, Number, String, Boolean, Set, Map, Error,
+        window: { supabase: { createClient: () => client } },
+        document: { createElement: () => ({}), head: { appendChild() {} } }
+    });
+    vm.runInContext(supabaseSource, context);
+    return context;
 }
 
 test("normaliza convidados antigos por grupo sem perder nomes ou IDs", () => {
@@ -489,7 +582,7 @@ test("cartões, detalhes, lista completa e PDF exibem crianças sem alterar o to
     assert.match(guestSource, /const sortedGroups = sortGuestGroups\(state\.guests\)/);
 });
 
-test("modelo local prepara grupo de sistema e pessoas para o banco futuro", () => {
+test("modelo local preserva grupo de sistema e vínculos usados pelo banco", () => {
     assert.match(guestSource, /isSystem: isGodparentsGroup \|\| Boolean\(group\.isSystem\)/);
     assert.match(guestSource, /systemKey: isGodparentsGroup \? "godparents" : null/);
     assert.match(guestSource, /sortOrder: isGodparentsGroup \? 0/);
@@ -500,22 +593,23 @@ test("modelo local prepara grupo de sistema e pessoas para o banco futuro", () =
     assert.match(guestSource, /function findGuestSystemGroup\(groups, systemKey\)/);
 });
 
-test("documentação descreve o modelo local e o mapeamento futuro sem executar SQL", () => {
+test("documentação descreve a integração real sem incluir SQL", () => {
     assert.match(guestDocumentation, /Padrinhos & Madrinhas/);
     assert.match(guestDocumentation, /`isChild`/);
     assert.match(guestDocumentation, /`systemKey`/);
-    assert.match(guestDocumentation, /## 16\. Modelo futuro: `guest_groups`/);
-    assert.match(guestDocumentation, /## 17\. Modelo futuro: `guest_members`/);
+    assert.match(guestDocumentation, /`guest_groups`/);
+    assert.match(guestDocumentation, /`guest_members`/);
     assert.match(guestDocumentation, /`pair_id`/);
     assert.match(guestDocumentation, /`household_id`/);
     assert.match(guestDocumentation, /`couple_child`/);
     assert.match(guestDocumentation, /`guest_groups\.notes`/);
-    assert.match(guestDocumentation, /`TEXT NOT NULL DEFAULT ''`/);
     assert.match(guestDocumentation, /`normalizeGuestNameForComparison\(name\)`/);
     assert.match(guestDocumentation, /`getAllGuestPeople\(groups\)`/);
     assert.match(guestDocumentation, /Duplicados nunca são bloqueados/);
     assert.doesNotMatch(guestDocumentation, /`child_couple`/);
-    assert.match(guestDocumentation, /RLS futura/);
+    assert.match(guestDocumentation, /RLS/);
+    assert.match(guestDocumentation, /nosso-casamento-guests-backup:/);
+    assert.match(guestDocumentation, /nosso-casamento-guests-migrated:/);
     assert.doesNotMatch(guestDocumentation, /CREATE\s+TABLE|ALTER\s+TABLE|CREATE\s+POLICY/i);
 });
 
@@ -539,11 +633,202 @@ test("estilos cobrem cartões fechados, celular, impressão e movimento reduzido
     assert.match(guestCss, /\.app-shell, dialog, \.toast \{ display: none !important; \}/);
 });
 
-test("persistência continua local e não chama Supabase ou backend", () => {
-    assert.match(guestSource, /saveState\(\)/);
-    assert.doesNotMatch(guestSource, /supabase|fetch\(|XMLHttpRequest|createCurrentWeddingGuest|updateCurrentWeddingGuest/i);
-    assert.match(guestSource, /state\.guests = normalizeGuestGroups\(state\.guests\)/);
-    assert.doesNotMatch(guestSource, /state\.guests = normalizeGuestGroups\(state\.guests\);\s*saveState\(\)/);
+test("Supabase é a fonte de verdade e convidados não voltam ao saveState", () => {
+    assert.doesNotMatch(guestSource, /saveState\(\)/);
+    assert.match(guestSource, /listCurrentWeddingGuestGroups/);
+    assert.match(guestSource, /createCurrentWeddingGuestGroup/);
+    assert.match(guestSource, /replaceOrSyncGuestGroupMembers/);
+    assert.match(guestSource, /void initializeGuests\(\)/);
+    assert.doesNotMatch(guestSource, /\.from\("guest_(?:groups|members)"\)/);
+});
+
+test("mapeia grupos nos dois sentidos sem aceitar campos técnicos da interface", () => {
+    const context = loadGuestSupabaseLogic();
+    const local = read(context, `mapGuestGroupRowToLocal({
+        id: '11111111-1111-4111-8111-111111111111', category: 'family', name: 'Família Silva',
+        relationship_group: null, notes: null, is_closed: null, is_system: false,
+        system_key: null, sort_order: null, created_at: '2026-08-25T10:00:00Z'
+    })`);
+    assert.deepEqual(local, {
+        id: "11111111-1111-4111-8111-111111111111",
+        category: "family", name: "Família Silva", relationshipGroup: "", notes: "",
+        isClosed: false, isSystem: false, systemKey: null, sortOrder: null,
+        createdAt: "2026-08-25T10:00:00Z", updatedAt: ""
+    });
+
+    const payload = read(context, `mapGuestGroupToDatabase({
+        id: 'local', weddingId: 'forjado', category: 'family', name: ' Família Silva ',
+        relationshipGroup: '', notes: ' Lado da noiva ', isClosed: true,
+        isSystem: false, systemKey: null, sortOrder: 4, members: [{ name: 'Ana' }],
+        createdAt: 'ontem', modalOpen: true
+    })`);
+    assert.deepEqual(payload, {
+        category: "family", name: "Família Silva", relationship_group: null,
+        notes: "Lado da noiva", is_closed: true, is_system: false,
+        system_key: null, sort_order: 4
+    });
+});
+
+test("mapeia membros e limita member_type aos seis valores do banco", () => {
+    const context = loadGuestSupabaseLogic();
+    const local = read(context, `mapGuestMemberRow({
+        id: 'member', guest_group_id: 'group', name: 'Pedro', notes: null,
+        is_child: true, member_type: 'couple_child', pair_id: null,
+        household_id: '22222222-2222-4222-8222-222222222222', sort_order: 3
+    })`);
+    assert.deepEqual(local, {
+        id: "member", guestGroupId: "group", name: "Pedro", notes: "", isChild: true,
+        memberType: "couple_child", pairId: null,
+        householdId: "22222222-2222-4222-8222-222222222222", sortOrder: 3,
+        createdAt: "", updatedAt: ""
+    });
+    assert.throws(
+        () => vm.runInContext("mapGuestMemberToDatabase({ name: 'X', memberType: 'child_couple' })", context),
+        error => error.code === "GUEST_MEMBER_TYPE_INVALID"
+    );
+    assert.throws(
+        () => vm.runInContext("mapGuestMemberToDatabase({ name: 'X', memberType: 'couple_adult', pairId: 'couple-local' })", context),
+        error => error.code === "GUEST_MEMBER_UUID_INVALID"
+    );
+});
+
+test("reconstrói família, avulsos, casal com crianças e padrinhos pelos vínculos remotos", () => {
+    const context = loadGuestLogic();
+    context.remoteGroups = [
+        { id: "family", category: "family", name: "Família Silva", relationshipGroup: "", notes: "Grupo", isClosed: false, isSystem: false, systemKey: null, sortOrder: 1, createdAt: "1" },
+        { id: "friends", category: "individual_group", name: "Amigos", relationshipGroup: "Amigos", notes: "", isClosed: false, isSystem: false, systemKey: null, sortOrder: 2, createdAt: "2" },
+        { id: "couples", category: "couples", name: "Casais", relationshipGroup: "", notes: "", isClosed: true, isSystem: false, systemKey: null, sortOrder: 3, createdAt: "3" },
+        { id: "gods", category: "godparents", name: "Padrinhos & Madrinhas", relationshipGroup: "", notes: "", isClosed: false, isSystem: true, systemKey: "godparents", sortOrder: 0, createdAt: "0" }
+    ];
+    context.remoteMembers = [
+        { id: "f1", guestGroupId: "family", name: "Ana Silva", notes: "Vegana", isChild: false, memberType: "family_member", pairId: null, householdId: null, sortOrder: 0 },
+        { id: "i1", guestGroupId: "friends", name: "Bia", notes: "", isChild: true, memberType: "individual_guest", pairId: null, householdId: null, sortOrder: 0 },
+        { id: "a1", guestGroupId: "couples", name: "Caio", notes: "", isChild: false, memberType: "couple_adult", pairId: "pair", householdId: "home", sortOrder: 0 },
+        { id: "a2", guestGroupId: "couples", name: "Dora", notes: "", isChild: false, memberType: "couple_adult", pairId: "pair", householdId: "home", sortOrder: 1 },
+        { id: "c1", guestGroupId: "couples", name: "Eva", notes: "3 anos", isChild: true, memberType: "couple_child", pairId: null, householdId: "home", sortOrder: 2 },
+        { id: "g1", guestGroupId: "gods", name: "Fred", notes: "", isChild: false, memberType: "godparent_couple", pairId: "god-pair", householdId: "god-home", sortOrder: 0 },
+        { id: "g2", guestGroupId: "gods", name: "Gabi", notes: "", isChild: false, memberType: "godparent_couple", pairId: "god-pair", householdId: "god-home", sortOrder: 1 },
+        { id: "g3", guestGroupId: "gods", name: "Hugo", notes: "Sozinho", isChild: false, memberType: "godparent_individual", pairId: null, householdId: null, sortOrder: 2 }
+    ];
+    const groups = read(context, "rebuildGuestGroupsFromRows(remoteGroups, remoteMembers)");
+    assert.equal(groups[0].systemKey, "godparents");
+    assert.equal(groups.find(group => group.id === "family").members[0].notes, "Vegana");
+    assert.equal(groups.find(group => group.id === "friends").members[0].isChild, true);
+    const couple = groups.find(group => group.id === "couples").couples[0];
+    assert.equal(couple.id, "pair");
+    assert.equal(couple.householdId, "home");
+    assert.equal(couple.children[0].id, "c1");
+    assert.equal(couple.children[0].notes, "3 anos");
+    const godparents = groups.find(group => group.id === "gods");
+    assert.equal(godparents.couples.length, 1);
+    assert.equal(godparents.individuals[0].id, "g3");
+});
+
+test("migração converte IDs locais em UUIDs novos e compartilha pair_id e household_id", () => {
+    const context = loadGuestLogic();
+    context.legacyCouples = {
+        id: "group-local", category: "couples", name: "Casais", couples: [{
+            id: "couple-local", firstPerson: { id: "adult-local-1", name: "João" },
+            secondPerson: { id: "adult-local-2", name: "Maria" },
+            children: [{ id: "child-local", name: "Pedro", isChild: true }]
+        }]
+    };
+    context.uuidValues = [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222"
+    ];
+    const rows = read(context, "flattenGuestGroupMembersForDatabase(legacyCouples, () => uuidValues.shift())");
+    assert.equal(rows.length, 3);
+    assert.equal(rows.some(row => Object.hasOwn(row, "id")), false);
+    assert.equal(rows[0].pairId, rows[1].pairId);
+    assert.equal(rows[0].householdId, rows[1].householdId);
+    assert.equal(rows[2].pairId, null);
+    assert.equal(rows[2].householdId, rows[0].householdId);
+    assert.equal(rows[2].memberType, "couple_child");
+});
+
+test("lista grupos e integrantes remotos somente no casamento autenticado", async () => {
+    const client = createGuestSupabaseClient({
+        groupRows: [{ id: "group-1", wedding_id: "wedding-1", category: "family", name: "Família Silva" }],
+        memberRows: [{ id: "member-1", guest_group_id: "group-1", name: "Ana Silva", member_type: "family_member" }]
+    });
+    const context = loadGuestSupabaseWithClient(client);
+    const result = await context.listCurrentWeddingGuestGroups();
+    assert.equal(result.weddingId, "wedding-1");
+    assert.equal(result.guestGroups[0].id, "group-1");
+    assert.equal(result.guestMembers[0].guestGroupId, "group-1");
+    const groupList = client.calls.find(call => call.table === "guest_groups" && call.operation === "list");
+    assert.deepEqual(groupList.filters, [{ column: "wedding_id", value: "wedding-1" }]);
+    assert.deepEqual(groupList.orders.map(order => order.column), ["is_system", "sort_order", "created_at"]);
+    const memberList = client.calls.find(call => call.table === "guest_members" && call.operation === "list");
+    assert.deepEqual(memberList.inFilters, [{ column: "guest_group_id", values: ["group-1"] }]);
+});
+
+test("cadastro de grupo injeta wedding_id autenticado e nunca envia ID local", async () => {
+    const client = createGuestSupabaseClient();
+    const context = loadGuestSupabaseWithClient(client);
+    const created = await context.createCurrentWeddingGuestGroup({
+        id: "group-local", weddingId: "forjado", category: "family", name: "Família Silva",
+        members: [{ id: "member-local", name: "Ana" }]
+    });
+    const insert = client.calls.find(call => call.table === "guest_groups" && call.operation === "insert");
+    assert.equal(insert.payload.wedding_id, "wedding-1");
+    assert.equal(Object.hasOwn(insert.payload, "id"), false);
+    assert.equal(Object.hasOwn(insert.payload, "members"), false);
+    assert.equal(created.id, "11111111-1111-4111-8111-111111111111");
+});
+
+test("sincronização incremental atualiza alterados, insere novos e exclui apenas removidos", async () => {
+    const groupId = "11111111-1111-4111-8111-111111111111";
+    const memberOne = {
+        id: "21111111-1111-4111-8111-111111111111", guestGroupId: groupId,
+        name: "Ana", notes: "", isChild: false, memberType: "family_member",
+        pairId: null, householdId: null, sortOrder: 0
+    };
+    const memberTwo = { ...memberOne, id: "31111111-1111-4111-8111-111111111111", name: "Bia", sortOrder: 1 };
+    const removed = { ...memberOne, id: "41111111-1111-4111-8111-111111111111", name: "Caio", sortOrder: 2 };
+    const client = createGuestSupabaseClient({
+        groupRows: [{ id: groupId, wedding_id: "wedding-1", category: "family", name: "Família Silva" }],
+        memberRows: [memberOne, memberTwo]
+    });
+    const context = loadGuestSupabaseWithClient(client);
+    await context.replaceOrSyncGuestGroupMembers(groupId, [
+        memberOne,
+        { ...memberTwo, notes: "Vegetariana" },
+        { name: "Dora", notes: "", isChild: true, memberType: "family_member", pairId: null, householdId: null, sortOrder: 3 }
+    ], [memberOne, memberTwo, removed]);
+
+    const updates = client.calls.filter(call => call.table === "guest_members" && call.operation === "update");
+    const inserts = client.calls.filter(call => call.table === "guest_members" && call.operation === "insert");
+    const deletes = client.calls.filter(call => call.table === "guest_members" && call.operation === "delete");
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].filters.find(filter => filter.column === "id").value, memberTwo.id);
+    assert.equal(updates[0].payload.notes, "Vegetariana");
+    assert.equal(inserts.length, 1);
+    assert.equal(inserts[0].payload[0].name, "Dora");
+    assert.deepEqual(deletes[0].inFilters, [{ column: "id", values: [removed.id] }]);
+});
+
+test("RLS é traduzida e não há qualquer acesso à tabela antiga guests", async () => {
+    const client = createGuestSupabaseClient({
+        groupRows: [{ id: "group-1", wedding_id: "wedding-1" }],
+        errors: { "guest_groups:update": { code: "42501", message: "row-level security" } }
+    });
+    const context = loadGuestSupabaseWithClient(client);
+    await assert.rejects(
+        context.updateCurrentWeddingGuestGroupClosed("group-1", true),
+        error => error.code === "GUEST_PERMISSION_DENIED"
+    );
+    assert.doesNotMatch(supabaseSource, /\.from\(["']guests["']\)/);
+});
+
+test("migração possui backup, marca por casamento e compensação de falha parcial", () => {
+    assert.match(guestSource, /nosso-casamento-guests-backup:\$\{weddingId\}/);
+    assert.match(guestSource, /nosso-casamento-guests-migrated:\$\{weddingId\}/);
+    assert.match(guestSource, /if \(localStorage\.getItem\(markerKey\)\) return false/);
+    assert.match(guestSource, /localStorage\.setItem\(markerKey, new Date\(\)\.toISOString\(\)\)/);
+    assert.match(guestSource, /catch \(error\) \{[\s\S]*?deleteCurrentWeddingGuestGroup/);
+    assert.match(guestSource, /system:godparents/);
 });
 
 test("normaliza nomes para comparação sem alterar o valor visual", () => {
@@ -715,7 +1000,7 @@ test("interface oferece observação individual em todos os fluxos e observaçã
     assert.match(guestHtml, /<dialog class="group-notes-dialog" id="group-notes-dialog"/);
     assert.match(guestHtml, /Observação do grupo/);
     assert.match(guestSource, /data-action="edit-group-notes"/);
-    assert.match(guestSource, /function saveGroupNotes\(\)[\s\S]*?updateGuestGroupNotes\(state\.guests, groupNotesGroupId/);
+    assert.match(guestSource, /async function saveGroupNotes\(\)[\s\S]*?updateCurrentWeddingGuestGroupNotes/);
     assert.match(guestSource, /group\.notes \? "Editar observação do grupo" : "\+ Adicionar observação ao grupo"/);
 });
 
