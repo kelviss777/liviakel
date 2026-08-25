@@ -663,10 +663,33 @@ test("mapeia grupos nos dois sentidos sem aceitar campos técnicos da interface"
         createdAt: 'ontem', modalOpen: true
     })`);
     assert.deepEqual(payload, {
-        category: "family", name: "Família Silva", relationship_group: null,
+        category: "family", name: "Família Silva", relationship_group: "",
         notes: "Lado da noiva", is_closed: true, is_system: false,
         system_key: null, sort_order: 4
     });
+});
+
+test("payload de grupos nunca envia null ou undefined em campos textuais obrigatórios", () => {
+    const context = loadGuestSupabaseLogic();
+    const categories = [
+        ["family", "Família Silva"],
+        ["couples", "Casais"],
+        ["individual_group", "Amigos"],
+        ["godparents", "Padrinhos & Madrinhas"]
+    ];
+    for (const [category, name] of categories) {
+        context.groupWithoutNotes = { category, name, notes: null };
+        const payload = read(context, "mapGuestGroupToDatabase(groupWithoutNotes)");
+        assert.equal(payload.notes, "");
+        assert.equal(payload.relationship_group, "");
+        assert.equal(payload.is_closed, false);
+        assert.equal(payload.is_system, false);
+        assert.equal(payload.system_key, null);
+        assert.equal(payload.sort_order, null);
+        assert.equal(Object.values(payload).includes(undefined), false);
+    }
+    context.groupWithNotes = { category: "family", name: "Família Silva", notes: "  Lado da noiva  " };
+    assert.equal(read(context, "mapGuestGroupToDatabase(groupWithNotes)").notes, "Lado da noiva");
 });
 
 test("mapeia membros e limita member_type aos seis valores do banco", () => {
@@ -689,6 +712,19 @@ test("mapeia membros e limita member_type aos seis valores do banco", () => {
     assert.throws(
         () => vm.runInContext("mapGuestMemberToDatabase({ name: 'X', memberType: 'couple_adult', pairId: 'couple-local' })", context),
         error => error.code === "GUEST_MEMBER_UUID_INVALID"
+    );
+    context.memberWithoutNotes = { name: "Ana", memberType: "family_member", notes: undefined };
+    context.memberWithNotes = { name: "Bia", memberType: "individual_guest", notes: "  Vegetariana  " };
+    const emptyNotesPayload = read(context, "mapGuestMemberToDatabase(memberWithoutNotes)");
+    assert.equal(emptyNotesPayload.notes, "");
+    assert.equal(emptyNotesPayload.is_child, false);
+    assert.equal(emptyNotesPayload.pair_id, null);
+    assert.equal(emptyNotesPayload.household_id, null);
+    assert.equal(emptyNotesPayload.sort_order, null);
+    assert.equal(read(context, "mapGuestMemberToDatabase(memberWithNotes)").notes, "Vegetariana");
+    assert.throws(
+        () => vm.runInContext("mapGuestMemberToDatabase({ name: null, memberType: 'family_member' })", context),
+        error => error.code === "GUEST_MEMBER_NAME_REQUIRED"
     );
 });
 
@@ -775,7 +811,38 @@ test("cadastro de grupo injeta wedding_id autenticado e nunca envia ID local", a
     assert.equal(insert.payload.wedding_id, "wedding-1");
     assert.equal(Object.hasOwn(insert.payload, "id"), false);
     assert.equal(Object.hasOwn(insert.payload, "members"), false);
+    assert.equal(insert.payload.notes, "");
+    assert.equal(insert.payload.relationship_group, "");
     assert.equal(created.id, "11111111-1111-4111-8111-111111111111");
+});
+
+test("INSERT de integrantes envia notes como string vazia ou texto normalizado", async () => {
+    const groupId = "11111111-1111-4111-8111-111111111111";
+    const client = createGuestSupabaseClient({
+        groupRows: [{ id: groupId, wedding_id: "wedding-1", category: "family", name: "Família Silva" }]
+    });
+    const context = loadGuestSupabaseWithClient(client);
+    await context.createGuestMembers(groupId, [
+        { name: "Ana Silva", memberType: "family_member", notes: null, isChild: false, sortOrder: 0 },
+        { name: "Bia Silva", memberType: "family_member", notes: "  Vegetariana  ", isChild: true, sortOrder: 1 }
+    ]);
+    const insert = client.calls.find(call => call.table === "guest_members" && call.operation === "insert");
+    assert.equal(insert.payload[0].notes, "");
+    assert.equal(insert.payload[1].notes, "Vegetariana");
+    assert.equal(insert.payload[0].is_child, false);
+    assert.equal(insert.payload[1].is_child, true);
+    assert.equal(insert.payload.every(row => row.name && row.member_type), true);
+    assert.equal(insert.payload.some(row => Object.values(row).includes(undefined)), false);
+});
+
+test("UPDATE isolado de observação do grupo também envia string vazia", async () => {
+    const client = createGuestSupabaseClient({
+        groupRows: [{ id: "group-1", wedding_id: "wedding-1", category: "family", name: "Família Silva", notes: "Antiga" }]
+    });
+    const context = loadGuestSupabaseWithClient(client);
+    await context.updateCurrentWeddingGuestGroupNotes("group-1", undefined);
+    const update = client.calls.find(call => call.table === "guest_groups" && call.operation === "update");
+    assert.deepEqual(update.payload, { notes: "" });
 });
 
 test("sincronização incremental atualiza alterados, insere novos e exclui apenas removidos", async () => {

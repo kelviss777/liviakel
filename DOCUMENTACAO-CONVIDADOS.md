@@ -192,8 +192,8 @@ Marcações antigas `firstPersonIsChild`, `secondPersonIsChild` ou `isChild` den
 | casamento atual | `wedding_id` | UUID |
 | `category` | `category` | texto |
 | `name` | `name` | texto |
-| `relationshipGroup` | `relationship_group` | texto anulável |
-| `notes` | `notes` | texto não nulo com padrão vazio |
+| `relationshipGroup` | `relationship_group` | string; vazio usa `""` |
+| `notes` | `notes` | string; vazio usa `""` |
 | `isClosed` | `is_closed` | booleano |
 | `isSystem` | `is_system` | booleano |
 | `systemKey` | `system_key` | texto anulável |
@@ -210,7 +210,7 @@ Marcações antigas `firstPersonIsChild`, `secondPersonIsChild` ou `isChild` den
 | `person.id` | `id` | ID da pessoa |
 | `group.id` | `guest_group_id` | grupo pai |
 | `person.name` | `name` | obrigatório |
-| `person.notes` | `notes` | texto não nulo com padrão vazio |
+| `person.notes` | `notes` | string; vazio usa `""` |
 | classificação | `is_child` | verdadeiro apenas para Família/Avulso marcados e `couple.children` |
 | contexto | `member_type` | tipo conceitual abaixo |
 | `couple.id` para adultos | `pair_id` | compartilhado pelos dois adultos |
@@ -292,7 +292,9 @@ Os destinos remotos são distintos:
 | `group.notes` | `guest_groups.notes` | UPDATE isolado de `notes` |
 | `person.notes` | `guest_members.notes` | UPDATE incremental da pessoa por ID |
 
-Valores `NULL` vindos do banco viram `""` no modelo em memória. Ao salvar uma observação de grupo, somente `guest_groups.notes` é enviada; integrantes e `is_closed` não são alterados. Observações individuais seguem no payload da pessoa correta, preservando ID, `member_type`, `pair_id`, `household_id` e `is_child`.
+Valores `NULL` legados vindos do banco viram `""` no modelo em memória. `mapGuestGroupToDatabase()` envia `relationship_group` e `notes` sempre como strings; `mapGuestMemberToDatabase()` também envia `notes` sempre como string. Assim, campos ausentes, `null` ou `undefined` viram `""` e respeitam o contrato `TEXT NOT NULL DEFAULT ''` sem depender do default quando a coluna está presente no payload.
+
+Ao salvar uma observação de grupo, somente `guest_groups.notes` é enviada; apagar ou omitir o texto produz `{ notes: "" }`, nunca `{ notes: null }`. Integrantes e `is_closed` não são alterados. Observações individuais seguem no payload da pessoa correta, preservando ID, `member_type`, `pair_id`, `household_id` e `is_child`.
 
 ## 24. Percurso central de pessoas
 
