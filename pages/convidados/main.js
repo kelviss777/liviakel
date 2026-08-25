@@ -1,4 +1,4 @@
-const GUEST_SCHEMA_VERSION = 4;
+const GUEST_SCHEMA_VERSION = 6;
 const GUEST_CATEGORIES = Object.freeze({
     godparents: { label: "Padrinhos & Madrinhas", singular: "Padrinhos & Madrinhas" },
     family: { label: "Família", singular: "Família" },
@@ -17,6 +17,43 @@ function comparableGuestText(value) {
 
 function searchableGuestText(value) {
     return comparableGuestText(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function normalizeGuestNameForComparison(name) {
+    return cleanGuestText(name)
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLocaleLowerCase("pt-BR")
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+function getGuestNameTokens(name) {
+    const normalized = normalizeGuestNameForComparison(name);
+    return normalized ? normalized.split(" ") : [];
+}
+
+function areGuestNameTokensHighlySimilar(leftTokens, rightTokens) {
+    if (leftTokens.length < 2 || leftTokens.length !== rightTokens.length) return false;
+    if (leftTokens[0] !== rightTokens[0] || leftTokens.at(-1) !== rightTokens.at(-1)) return false;
+
+    return leftTokens.every((token, index) => {
+        const other = rightTokens[index];
+        return token === other || (token.length === 1 && other.startsWith(token)) ||
+            (other.length === 1 && token.startsWith(other));
+    });
+}
+
+function getGuestNameMatchLevel(leftName, rightName) {
+    const left = normalizeGuestNameForComparison(leftName);
+    const right = normalizeGuestNameForComparison(rightName);
+    if (!left || !right) return null;
+    if (left === right) return "exact";
+
+    return areGuestNameTokensHighlySimilar(getGuestNameTokens(left), getGuestNameTokens(right))
+        ? "similar"
+        : null;
 }
 
 function extractFamilyNameSuffix(value) {
@@ -95,33 +132,27 @@ function safeGuestId(value, prefix) {
     return cleanGuestText(value) || makeGuestId(prefix);
 }
 
-function normalizePerson(person, prefix = "person") {
-    if (typeof person === "string") {
-        return { id: makeGuestId(prefix), name: cleanGuestText(person), isChild: false };
-    }
-
-    return {
-        id: safeGuestId(person?.id, prefix),
-        name: cleanGuestText(person?.name),
-        isChild: person?.isChild === true
+function normalizeGuestPerson(person, { prefix = "person", id = null, isChild = false, includeIsChild = true } = {}) {
+    const value = typeof person === "string" ? { name: person } : person || {};
+    const normalized = {
+        id: safeGuestId(value.id || id, prefix),
+        name: cleanGuestText(value.name),
+        notes: cleanGuestText(value.notes)
     };
+    if (includeIsChild) normalized.isChild = isChild === true || value.isChild === true;
+    return normalized;
+}
+
+function normalizePerson(person, prefix = "person") {
+    return normalizeGuestPerson(person, { prefix });
 }
 
 function normalizeAdultPerson(person, id, prefix = "pair-person") {
-    const value = typeof person === "string" ? { name: person } : person || {};
-    return {
-        id: safeGuestId(value.id || id, prefix),
-        name: cleanGuestText(value.name)
-    };
+    return normalizeGuestPerson(person, { prefix, id, includeIsChild: false });
 }
 
 function normalizeCoupleChild(child, coupleId) {
-    const value = typeof child === "string" ? { name: child } : child || {};
-    return {
-        id: safeGuestId(value.id, `${coupleId}-child`),
-        name: cleanGuestText(value.name),
-        isChild: true
-    };
+    return normalizeGuestPerson(child, { prefix: `${coupleId}-child`, isChild: true });
 }
 
 function normalizeCouple(couple, prefix = "couple", includeChildren = true) {
@@ -168,6 +199,7 @@ function normalizeStructuredGroup(group) {
         category,
         name: cleanGuestText(group.name) || GUEST_CATEGORIES[category].label,
         relationshipGroup: cleanGuestText(group.relationshipGroup),
+        notes: cleanGuestText(group.notes),
         isClosed: Boolean(group.isClosed),
         isSystem: isGodparentsGroup || Boolean(group.isSystem),
         systemKey: isGodparentsGroup ? "godparents" : null,
@@ -246,6 +278,7 @@ function mergeCompatibleGroups(groups) {
         existing.isClosed = existing.isClosed || group.isClosed;
         existing.isSystem = existing.isSystem || group.isSystem;
         existing.systemKey = existing.systemKey || group.systemKey;
+        existing.notes = existing.notes || group.notes;
     });
 
     return merged.map(item => item.group);
@@ -273,6 +306,7 @@ function normalizeGuestGroups(rawGuests) {
                 category: "individual_group",
                 name: relationshipGroup,
                 relationshipGroup,
+                notes: "",
                 isClosed: false,
                 isSystem: false,
                 systemKey: null,
@@ -287,6 +321,7 @@ function normalizeGuestGroups(rawGuests) {
         legacyGroups.get(key).members.push({
             id: safeGuestId(item?.id, "legacy-person"),
             name,
+            notes: cleanGuestText(item?.notes),
             isChild: item?.isChild === true
         });
     });
@@ -317,44 +352,117 @@ function sortGuestGroups(groups) {
         .map(item => item.group);
 }
 
+function getAllGuestPeople(groups = []) {
+    return (Array.isArray(groups) ? groups : []).flatMap(group => {
+        const context = {
+            groupId: group.id,
+            groupName: group.name,
+            category: group.category
+        };
+
+        if (group.category === "godparents") {
+            const couples = (group.couples || []).flatMap(couple => [
+                {
+                    ...(couple.firstPerson || { name: couple.firstPersonName }),
+                    isChild: false,
+                    pairId: couple.id,
+                    householdId: couple.id,
+                    memberType: "godparent_couple",
+                    ...context
+                },
+                {
+                    ...(couple.secondPerson || { name: couple.secondPersonName }),
+                    isChild: false,
+                    pairId: couple.id,
+                    householdId: couple.id,
+                    memberType: "godparent_couple",
+                    ...context
+                }
+            ]);
+            const individuals = (group.individuals || []).map(person => ({
+                ...person,
+                isChild: false,
+                pairId: null,
+                householdId: null,
+                memberType: "godparent_individual",
+                ...context
+            }));
+            return [...couples, ...individuals];
+        }
+
+        if (group.category === "couples") {
+            return (group.couples || []).flatMap(couple => [
+                {
+                    ...(couple.firstPerson || { name: couple.firstPersonName }),
+                    isChild: false,
+                    pairId: couple.id,
+                    householdId: couple.id,
+                    memberType: "couple_adult",
+                    ...context
+                },
+                {
+                    ...(couple.secondPerson || { name: couple.secondPersonName }),
+                    isChild: false,
+                    pairId: couple.id,
+                    householdId: couple.id,
+                    memberType: "couple_adult",
+                    ...context
+                },
+                ...(couple.children || []).map(child => ({
+                    ...child,
+                    isChild: true,
+                    pairId: null,
+                    householdId: couple.id,
+                    memberType: "couple_child",
+                    ...context
+                }))
+            ]);
+        }
+
+        return (group.members || []).map(person => ({
+            ...person,
+            pairId: null,
+            householdId: null,
+            memberType: group.category === "family" ? "family_member" : "individual_guest",
+            ...context
+        }));
+    });
+}
+
 function getPeopleInGroup(group) {
-    if (!group) return [];
-    if (group.category === "godparents") {
-        return [
-            ...(group.couples || []).flatMap(couple => [
-                couple.firstPerson || { name: couple.firstPersonName },
-                couple.secondPerson || { name: couple.secondPersonName }
-            ]),
-            ...(group.individuals || [])
-        ];
-    }
-    if (group.category === "couples") {
-        return (group.couples || []).flatMap(couple => [
-            couple.firstPerson || { name: couple.firstPersonName },
-            couple.secondPerson || { name: couple.secondPersonName },
-            ...(couple.children || [])
-        ]);
-    }
-    return group.members || [];
+    return getAllGuestPeople(group ? [group] : []);
+}
+
+function findPotentialGuestDuplicates(candidates, groups, ignoredPersonIds = []) {
+    const ignoredIds = new Set([
+        ...ignoredPersonIds,
+        ...(Array.isArray(candidates) ? candidates : []).map(candidate => candidate.id)
+    ].filter(Boolean));
+    const uniquePeople = new Map();
+
+    getAllGuestPeople(groups).forEach(person => {
+        if (!ignoredIds.has(person.id) && !uniquePeople.has(person.id)) {
+            uniquePeople.set(person.id, person);
+        }
+    });
+
+    const candidateList = Array.isArray(candidates) ? candidates : [];
+
+    return candidateList.map(candidate => {
+        const matches = [...uniquePeople.values()].flatMap(person => {
+            const level = getGuestNameMatchLevel(candidate.name, person.name);
+            return level ? [{ ...person, level }] : [];
+        });
+        return matches.length ? { candidate, matches } : null;
+    }).filter(Boolean);
 }
 
 function countGroupPeople(group) {
-    if (!group) return 0;
-    if (group.category === "godparents") {
-        return (group.couples?.length || 0) * 2 + (group.individuals?.length || 0);
-    }
-    if (group.category === "couples") {
-        return (group.couples || []).reduce((total, couple) => total + 2 + (couple.children?.length || 0), 0);
-    }
-    return group.members?.length || 0;
+    return getPeopleInGroup(group).length;
 }
 
 function countChildrenInGroup(group) {
-    if (group?.category === "godparents") return 0;
-    if (group?.category === "couples") {
-        return (group.couples || []).reduce((total, couple) => total + (couple.children?.length || 0), 0);
-    }
-    return (group?.members || []).filter(person => person?.isChild === true).length;
+    return getPeopleInGroup(group).filter(person => person.isChild === true).length;
 }
 
 function countAdultsInGroup(group) {
@@ -382,7 +490,7 @@ function countAllAdults(groups) {
     return countAllPeople(groups) - countAllChildren(groups);
 }
 
-function saveCoupleChild(couple, childId, value) {
+function saveCoupleChild(couple, childId, value, newChildId = null, notes = "") {
     const name = cleanGuestText(value);
     if (!couple || !name) return null;
     couple.children ||= [];
@@ -392,10 +500,11 @@ function saveCoupleChild(couple, childId, value) {
         if (!child) return null;
         child.name = name;
         child.isChild = true;
+        child.notes = cleanGuestText(notes);
         return child;
     }
 
-    const child = { id: makeGuestId("couple-child"), name, isChild: true };
+    const child = { id: newChildId || makeGuestId("couple-child"), name, notes: cleanGuestText(notes), isChild: true };
     couple.children.push(child);
     return child;
 }
@@ -413,13 +522,7 @@ function pluralizeGuest(count, singular, plural) {
 
 function getGroupSearchText(group) {
     const names = [group.name, group.relationshipGroup, GUEST_CATEGORIES[group.category]?.label];
-    group.members?.forEach(member => names.push(member.name));
-    group.individuals?.forEach(member => names.push(member.name));
-    group.couples?.forEach(couple => names.push(
-        couple.firstPerson?.name ?? couple.firstPersonName,
-        couple.secondPerson?.name ?? couple.secondPersonName,
-        ...(couple.children || []).map(child => child.name)
-    ));
+    getPeopleInGroup(group).forEach(person => names.push(person.name));
     return searchableGuestText(names.join(" "));
 }
 
@@ -431,6 +534,13 @@ function filterGuestGroups(groups, search, stateFilter, categoryFilter) {
         const matchesCategory = categoryFilter === "all" || group.category === categoryFilter;
         return matchesSearch && matchesState && matchesCategory;
     });
+}
+
+function updateGuestGroupNotes(groups, groupId, value) {
+    const group = (Array.isArray(groups) ? groups : []).find(item => item.id === groupId);
+    if (!group) return null;
+    group.notes = cleanGuestText(value);
+    return group;
 }
 
 function getGroupMeta(group) {
@@ -448,6 +558,7 @@ function createEmptyGuestDraft(category = "") {
         category,
         name: category && category !== "family" ? GUEST_CATEGORIES[category].label : "",
         relationshipGroup: "",
+        notes: "",
         isClosed: false,
         isSystem: category === "godparents",
         systemKey: category === "godparents" ? "godparents" : null,
@@ -469,25 +580,124 @@ function focusControlNaturally(control) {
     }
 }
 
+let pageScrollLockState = null;
+
+function lockPageScroll() {
+    if (pageScrollLockState) return;
+
+    const root = document.documentElement;
+    const body = document.body;
+    const scrollbarWidth = Math.max(0, window.innerWidth - root.clientWidth);
+    const computedPaddingRight = Number.parseFloat(window.getComputedStyle(body).paddingRight) || 0;
+    pageScrollLockState = {
+        x: window.scrollX,
+        y: window.scrollY,
+        rootOverflow: root.style.overflow,
+        bodyPosition: body.style.position,
+        bodyTop: body.style.top,
+        bodyLeft: body.style.left,
+        bodyRight: body.style.right,
+        bodyWidth: body.style.width,
+        bodyOverflow: body.style.overflow,
+        bodyPaddingRight: body.style.paddingRight
+    };
+
+    root.classList.add("guest-dialog-scroll-lock");
+    body.classList.add("guest-dialog-scroll-lock");
+    root.style.overflow = "hidden";
+    body.style.position = "fixed";
+    body.style.top = `-${pageScrollLockState.y}px`;
+    body.style.left = `-${pageScrollLockState.x}px`;
+    body.style.right = "0";
+    body.style.width = "100%";
+    body.style.overflow = "hidden";
+    if (scrollbarWidth) body.style.paddingRight = `${computedPaddingRight + scrollbarWidth}px`;
+}
+
+function unlockPageScroll() {
+    if (!pageScrollLockState) return;
+
+    const root = document.documentElement;
+    const body = document.body;
+    const saved = pageScrollLockState;
+    pageScrollLockState = null;
+
+    root.style.overflow = saved.rootOverflow;
+    body.style.position = saved.bodyPosition;
+    body.style.top = saved.bodyTop;
+    body.style.left = saved.bodyLeft;
+    body.style.right = saved.bodyRight;
+    body.style.width = saved.bodyWidth;
+    body.style.overflow = saved.bodyOverflow;
+    body.style.paddingRight = saved.bodyPaddingRight;
+    window.scrollTo(saved.x, saved.y);
+    root.classList.remove("guest-dialog-scroll-lock");
+    body.classList.remove("guest-dialog-scroll-lock");
+}
+
+function syncPageScrollLock() {
+    if (document.querySelector("dialog[open]")) lockPageScroll();
+    else unlockPageScroll();
+}
+
+function openPageDialog(dialog) {
+    if (!dialog || dialog.open) return;
+    lockPageScroll();
+    try {
+        dialog.showModal();
+    } catch (error) {
+        syncPageScrollLock();
+        throw error;
+    }
+}
+
+function closePageDialog(dialog) {
+    if (dialog?.open) dialog.close();
+    queueMicrotask(syncPageScrollLock);
+}
+
 const guestListElement = document.querySelector("#guest-list");
 const guestSearch = document.querySelector("#guest-search");
 const guestStateFilter = document.querySelector("#guest-state-filter");
 const guestCategoryFilter = document.querySelector("#guest-category-filter");
 const wizardDialog = document.querySelector("#guest-wizard-dialog");
 const wizardFields = document.querySelector("#wizard-fields");
+const guestReviewElement = document.querySelector("#guest-review");
 const wizardNext = document.querySelector("#wizard-next");
 const wizardBack = document.querySelector("#wizard-back");
 const detailsDialog = document.querySelector("#guest-details-dialog");
+const groupNotesDialog = document.querySelector("#group-notes-dialog");
 const completeListDialog = document.querySelector("#complete-guest-list-dialog");
 const completeListSearch = document.querySelector("#complete-list-search");
 const completeListContent = document.querySelector("#complete-list-content");
 const confirmDialog = document.querySelector("#guest-confirm-dialog");
+const duplicateDialog = document.querySelector("#guest-duplicate-dialog");
+
+const pageDialogObserver = new MutationObserver(mutations => {
+    if (mutations.some(mutation => mutation.attributeName === "open")) syncPageScrollLock();
+});
+pageDialogObserver.observe(document.body, { attributes: true, attributeFilter: ["open"], subtree: true });
+document.addEventListener("beforetoggle", event => {
+    if (event.target?.tagName !== "DIALOG") return;
+    if (event.newState === "open") lockPageScroll();
+    else queueMicrotask(syncPageScrollLock);
+}, true);
+document.addEventListener("touchmove", event => {
+    if (!pageScrollLockState) return;
+    const openDialog = event.target?.closest?.("dialog[open]");
+    if (!openDialog || event.target === openDialog) event.preventDefault();
+}, { capture: true, passive: false });
 
 let currentDetailsGroupId = null;
 let pendingConfirmation = null;
 let confirmationReturnFocus = null;
+let pendingDuplicateAction = null;
+let duplicateReviewAction = null;
+let duplicateReturnFocus = null;
 let wizardReturnFocus = null;
 let detailsReturnFocus = null;
+let groupNotesGroupId = null;
+let groupNotesReturnFocus = null;
 let completeListReturnFocus = null;
 let wizardState = createWizardState();
 
@@ -502,16 +712,100 @@ function createWizardState() {
         originChoice: "Amigos",
         buffer: {
             personName: "",
+            personNotes: "",
             personIsChild: false,
             firstPersonName: "",
+            firstPersonNotes: "",
             secondPersonName: "",
-            childName: ""
+            secondPersonNotes: "",
+            childName: "",
+            childNotes: ""
         },
         editingEntry: null,
         editingChildId: null,
         coupleChildrenExpanded: false,
-        activeCoupleId: null
+        activeCoupleId: null,
+        acceptedDuplicateNamesById: new Map(),
+        originalPeopleById: new Map()
     };
+}
+
+function getGuestComparisonGroups() {
+    const draft = wizardState.draft;
+    return [
+        ...state.guests.filter(group => group.id !== draft.id),
+        ...(draft.category ? [draft] : [])
+    ];
+}
+
+function renderDuplicateResults(results) {
+    return results.map(({ candidate, matches }) => `
+        <section class="duplicate-result">
+            <span class="duplicate-candidate-label">Nome que está sendo adicionado:</span>
+            <strong>${escapeHtml(candidate.name)}</strong>
+            <span>Já encontrado em:</span>
+            <ul>${matches.map(match => `<li>${escapeHtml(match.name)} <span>— ${escapeHtml(match.groupName)}</span></li>`).join("")}</ul>
+        </section>`).join("");
+}
+
+function openGuestDuplicateDialog({ results, onAccept, onReview, returnFocus }) {
+    pendingDuplicateAction = onAccept;
+    duplicateReviewAction = onReview;
+    duplicateReturnFocus = returnFocus || document.activeElement;
+    document.querySelector("#duplicate-results").innerHTML = renderDuplicateResults(results);
+    openPageDialog(duplicateDialog);
+    requestAnimationFrame(() => document.querySelector("#duplicate-review").focus());
+}
+
+function closeGuestDuplicateDialog(review = true) {
+    const reviewAction = duplicateReviewAction;
+    pendingDuplicateAction = null;
+    duplicateReviewAction = null;
+    closePageDialog(duplicateDialog);
+
+    if (reviewAction && review) reviewAction();
+    else if (review) duplicateReturnFocus?.focus?.();
+}
+
+function confirmDuplicateGuestAction() {
+    const action = pendingDuplicateAction;
+    if (!action) return;
+    pendingDuplicateAction = null;
+    duplicateReviewAction = null;
+    closePageDialog(duplicateDialog);
+    action();
+}
+
+function runGuestOperationWithDuplicateCheck(candidates, operation, { returnFocus, onReview } = {}) {
+    const pendingCandidates = candidates.filter(candidate =>
+        wizardState.acceptedDuplicateNamesById.get(candidate.id) !== normalizeGuestNameForComparison(candidate.name)
+    );
+    const results = findPotentialGuestDuplicates(
+        pendingCandidates,
+        getGuestComparisonGroups(),
+        candidates.map(candidate => candidate.id)
+    );
+
+    if (!results.length) {
+        operation();
+        return false;
+    }
+
+    openGuestDuplicateDialog({
+        results,
+        returnFocus,
+        onReview,
+        onAccept: () => {
+            pendingCandidates.forEach(candidate => {
+                wizardState.acceptedDuplicateNamesById.set(
+                    candidate.id,
+                    normalizeGuestNameForComparison(candidate.name)
+                );
+            });
+            operation();
+        }
+    });
+    return true;
 }
 
 function renderGuestSummary() {
@@ -549,6 +843,9 @@ function renderGuestCard(group) {
             <p class="card-count">${pluralizeGuest(total, "pessoa", "pessoas")}</p>
             ${children ? `<p class="card-children">${pluralizeGuest(children, "criança", "crianças")}</p>` : ""}
             <p class="card-meta">${escapeHtml(getGroupMeta(group))}</p>
+            <button class="card-group-notes-action" data-action="edit-group-notes" data-id="${safeId}" type="button" aria-label="${group.notes ? "Editar" : "Adicionar"} observação do grupo ${escapeHtml(group.name)}">
+                ${group.notes ? "Editar observação do grupo" : "+ Adicionar observação ao grupo"}
+            </button>
             <div class="card-actions">
                 <button class="card-action primary" data-action="view-group" data-id="${safeId}" type="button">Ver integrantes</button>
                 <button class="card-action" data-action="edit-group" data-id="${safeId}" type="button">Editar</button>
@@ -603,15 +900,33 @@ function renderChildOption(id, dataAttribute, checked, label = "Criança") {
     </label>`;
 }
 
+function renderOptionalPersonNotes({ id, dataAttribute, value = "", placeholder = "Ex.: Vem de outra cidade" }) {
+    const notes = cleanGuestText(value);
+    return `<details class="person-notes-field"${notes ? " open" : ""}>
+        <summary>${notes ? "Editar observação individual" : "+ Adicionar observação"}</summary>
+        <div class="wizard-field">
+            <label for="${id}">Observação individual</label>
+            <textarea id="${id}" ${dataAttribute} maxlength="1000" placeholder="${escapeHtml(placeholder)}">${escapeHtml(value)}</textarea>
+        </div>
+    </details>`;
+}
+
 function renderPersonWithChildBadge(person) {
-    return `<span class="person-with-classification"><span>${escapeHtml(person.name)}</span>${person.isChild ? '<span class="child-badge">Criança</span>' : ""}</span>`;
+    const notes = cleanGuestText(person?.notes);
+    return `<span class="person-detail-row">
+        <span class="person-with-classification"><span>${escapeHtml(person.name)}</span>${person.isChild ? '<span class="child-badge">Criança</span>' : ""}</span>
+        ${notes ? `<span class="person-detail-notes">${escapeHtml(notes)}</span>` : ""}
+    </span>`;
 }
 
 function renderCouplePresentation(couple, showChildren = true) {
     const children = Array.isArray(couple.children) ? couple.children : [];
     return `<div class="couple-presentation">
-        <span class="couple-names">${escapeHtml(couple.firstPerson.name)} <span class="couple-separator">e</span> ${escapeHtml(couple.secondPerson.name)}</span>
-        ${showChildren && children.length ? `<div class="couple-children-summary"><strong>Crianças:</strong><ul>${children.map(child => `<li>${escapeHtml(child.name)}</li>`).join("")}</ul></div>` : ""}
+        <div class="couple-people" aria-label="Casal">
+            ${renderPersonWithChildBadge(couple.firstPerson)}
+            ${renderPersonWithChildBadge(couple.secondPerson)}
+        </div>
+        ${showChildren && children.length ? `<div class="couple-children-summary"><strong>Crianças:</strong><ul>${children.map(child => `<li>${renderPersonWithChildBadge(child)}</li>`).join("")}</ul></div>` : ""}
     </div>`;
 }
 
@@ -620,9 +935,7 @@ function renderMemberRows(items, type) {
     return `<div class="member-list">${items.map(item => {
         const content = type === "couples"
             ? renderCouplePresentation(item, wizardState.draft.category === "couples")
-            : wizardState.draft.category === "godparents"
-                ? `<span>${escapeHtml(item.name)}</span>`
-                : renderPersonWithChildBadge(item);
+            : renderPersonWithChildBadge(item);
         return `
         <div class="member-row">
             ${content}
@@ -656,6 +969,7 @@ function renderFamilyFields() {
                         <input id="family-member-name" data-buffer-field="personName" value="${escapeHtml(wizardState.buffer.personName)}" placeholder="Ex.: Eduardo" autocomplete="off" aria-describedby="family-member-help">
                         <small class="field-help" id="family-member-help">O nome da família será acrescentado automaticamente.</small>
                         ${renderChildOption("family-member-child", 'data-buffer-boolean="personIsChild"', wizardState.buffer.personIsChild)}
+                        ${renderOptionalPersonNotes({ id: "family-member-notes", dataAttribute: 'data-buffer-field="personNotes"', value: wizardState.buffer.personNotes, placeholder: "Ex.: Vegetariana" })}
                     </div>
                     <button class="button button-ghost button-small" data-builder-action="add-person" data-entry-type="members" type="button">${editingPerson ? "Salvar integrante" : "+ Adicionar integrante"}</button>
                 </div>
@@ -691,6 +1005,7 @@ function renderIndividualFields() {
                         <label for="individual-name">Nome da pessoa</label>
                         <input id="individual-name" data-buffer-field="personName" value="${escapeHtml(wizardState.buffer.personName)}" placeholder="Ex.: Amanda Pereira" autocomplete="off">
                         ${renderChildOption("individual-member-child", 'data-buffer-boolean="personIsChild"', wizardState.buffer.personIsChild)}
+                        ${renderOptionalPersonNotes({ id: "individual-member-notes", dataAttribute: 'data-buffer-field="personNotes"', value: wizardState.buffer.personNotes, placeholder: "Ex.: Amigo do trabalho do noivo" })}
                     </div>
                     <button class="button button-ghost button-small" data-builder-action="add-person" data-entry-type="members" type="button">${editingPerson ? "Salvar pessoa" : "+ Adicionar pessoa"}</button>
                 </div>
@@ -727,11 +1042,13 @@ function renderCoupleFields() {
                     <label for="couple-first-name">Nome da primeira pessoa</label>
                     <input id="couple-first-name" data-draft-field="coupleFirst" value="${escapeHtml(couple.firstPerson.name)}" placeholder="Ex.: João" autocomplete="off">
                     <p class="field-error" data-error-for="coupleFirst"></p>
+                    ${renderOptionalPersonNotes({ id: "couple-first-notes", dataAttribute: 'data-draft-field="coupleFirstNotes"', value: couple.firstPerson.notes })}
                 </div>
                 <div class="wizard-field">
                     <label for="couple-second-name">Nome da segunda pessoa</label>
                     <input id="couple-second-name" data-draft-field="coupleSecond" value="${escapeHtml(couple.secondPerson.name)}" placeholder="Ex.: Maria" autocomplete="off">
                     <p class="field-error" data-error-for="coupleSecond"></p>
+                    ${renderOptionalPersonNotes({ id: "couple-second-notes", dataAttribute: 'data-draft-field="coupleSecondNotes"', value: couple.secondPerson.notes })}
                 </div>
             </div>
             <button class="couple-children-toggle" data-couple-children-action="toggle" type="button" aria-expanded="${expanded}" aria-controls="couple-children-panel">
@@ -747,6 +1064,7 @@ function renderCoupleFields() {
                     <div class="wizard-field field-grow">
                         <label for="couple-child-name">Nome da criança</label>
                         <input id="couple-child-name" data-buffer-field="childName" value="${escapeHtml(wizardState.buffer.childName)}" placeholder="Ex.: Pedro" autocomplete="off" aria-describedby="couple-child-error">
+                        ${renderOptionalPersonNotes({ id: "couple-child-notes", dataAttribute: 'data-buffer-field="childNotes"', value: wizardState.buffer.childNotes, placeholder: "Ex.: 3 anos" })}
                     </div>
                     <button class="button button-ghost button-small" data-couple-children-action="save" type="button">${editingChild ? "Salvar alteração" : "+ Adicionar criança"}</button>
                     ${editingChild ? '<button class="button button-text button-small" data-couple-children-action="cancel-edit" type="button">Cancelar edição</button>' : ""}
@@ -754,7 +1072,7 @@ function renderCoupleFields() {
                 <p class="field-error" id="couple-child-error" aria-live="polite"></p>
                 <div class="couple-children-list" aria-live="polite">
                     ${children.length ? children.map(child => `<div class="couple-child-row">
-                        <span>${escapeHtml(child.name)}</span>
+                        ${renderPersonWithChildBadge(child)}
                         <div class="member-row-actions">
                             <button class="member-action" data-child-action="edit" data-child-id="${escapeHtml(child.id)}" type="button">Editar</button>
                             <button class="member-action remove" data-child-action="remove" data-child-id="${escapeHtml(child.id)}" type="button">Remover</button>
@@ -784,11 +1102,11 @@ function renderGodparentsFields() {
                 <div class="builder-actions">
                     ${addingCouple ? `
                         <div class="form-row field-grow">
-                            <div class="wizard-field"><label for="godparent-first-name">Primeira pessoa</label><input id="godparent-first-name" data-buffer-field="firstPersonName" value="${escapeHtml(wizardState.buffer.firstPersonName)}" placeholder="Ex.: João" autocomplete="off"></div>
-                            <div class="wizard-field"><label for="godparent-second-name">Segunda pessoa</label><input id="godparent-second-name" data-buffer-field="secondPersonName" value="${escapeHtml(wizardState.buffer.secondPersonName)}" placeholder="Ex.: Maria" autocomplete="off"></div>
+                            <div class="wizard-field"><label for="godparent-first-name">Primeira pessoa</label><input id="godparent-first-name" data-buffer-field="firstPersonName" value="${escapeHtml(wizardState.buffer.firstPersonName)}" placeholder="Ex.: João" autocomplete="off">${renderOptionalPersonNotes({ id: "godparent-first-notes", dataAttribute: 'data-buffer-field="firstPersonNotes"', value: wizardState.buffer.firstPersonNotes, placeholder: "Ex.: Amigo de infância" })}</div>
+                            <div class="wizard-field"><label for="godparent-second-name">Segunda pessoa</label><input id="godparent-second-name" data-buffer-field="secondPersonName" value="${escapeHtml(wizardState.buffer.secondPersonName)}" placeholder="Ex.: Maria" autocomplete="off">${renderOptionalPersonNotes({ id: "godparent-second-notes", dataAttribute: 'data-buffer-field="secondPersonNotes"', value: wizardState.buffer.secondPersonNotes, placeholder: "Ex.: Prima da noiva" })}</div>
                         </div>
                         <button class="button button-ghost button-small" data-builder-action="add-couple" type="button">${editingSameType ? "Salvar casal" : wizardState.draft.couples.length ? "+ Adicionar outro casal" : "+ Adicionar casal"}</button>` : `
-                        <div class="wizard-field field-grow"><label for="godparent-name">Padrinho ou madrinha</label><input id="godparent-name" data-buffer-field="personName" value="${escapeHtml(wizardState.buffer.personName)}" placeholder="Ex.: Fernanda" autocomplete="off"></div>
+                        <div class="wizard-field field-grow"><label for="godparent-name">Padrinho ou madrinha</label><input id="godparent-name" data-buffer-field="personName" value="${escapeHtml(wizardState.buffer.personName)}" placeholder="Ex.: Fernanda" autocomplete="off">${renderOptionalPersonNotes({ id: "godparent-notes", dataAttribute: 'data-buffer-field="personNotes"', value: wizardState.buffer.personNotes, placeholder: "Ex.: Entrará sozinho" })}</div>
                         <button class="button button-ghost button-small" data-builder-action="add-person" data-entry-type="individuals" type="button">${editingSameType ? "Salvar pessoa" : wizardState.draft.individuals.length ? "+ Adicionar outra pessoa" : "+ Adicionar pessoa"}</button>`}
                 </div>
                 <p class="field-error" id="builder-error"></p>
@@ -837,7 +1155,15 @@ function renderGuestReview() {
         <span class="category-label">${escapeHtml(GUEST_CATEGORIES[group.category].label)}</span>
         <h3>${escapeHtml(group.name)}</h3>
         <p class="review-total">${pluralizeGuest(total, "pessoa", "pessoas")}${children ? ` · ${pluralizeGuest(children, "criança", "crianças")}` : ""}</p>
-        ${lists}`;
+        ${lists}
+        <details class="review-notes"${group.notes ? " open" : ""}>
+            <summary>${group.notes ? "Editar observação do grupo" : "+ Adicionar observação ao grupo"}</summary>
+            <div class="wizard-field">
+                <label for="guest-group-notes">Observação do grupo</label>
+                <textarea id="guest-group-notes" data-review-field="notes" maxlength="1000" placeholder="Ex.: São parentes da mãe da noiva.">${escapeHtml(group.notes)}</textarea>
+                <small class="field-help">Anote algo que vocês queiram lembrar sobre esse grupo.</small>
+            </div>
+        </details>`;
 }
 
 function wizardHasPendingEntry() {
@@ -924,7 +1250,7 @@ function openGuestWizard(trigger) {
     wizardReturnFocus = trigger || document.activeElement;
     wizardState = createWizardState();
     renderWizard();
-    wizardDialog.showModal();
+    openPageDialog(wizardDialog);
     requestAnimationFrame(() => document.querySelector("[data-category]")?.focus());
 }
 
@@ -937,6 +1263,9 @@ function openGuestEdit(groupId, trigger) {
     wizardState.step = 2;
     wizardState.editingId = group.id;
     wizardState.draft = structuredClone(group);
+    wizardState.originalPeopleById = new Map(
+        getAllGuestPeople([group]).map(person => [person.id, normalizeGuestNameForComparison(person.name)])
+    );
     if (group.category === "couples") {
         wizardState.activeCoupleId = group.couples[0]?.id || null;
         wizardState.coupleChildrenExpanded = (group.couples[0]?.children?.length || 0) > 0;
@@ -945,13 +1274,13 @@ function openGuestEdit(groupId, trigger) {
         wizardState.originChoice = INDIVIDUAL_ORIGINS.includes(group.relationshipGroup) ? group.relationshipGroup : "Outros";
     }
     renderWizard();
-    wizardDialog.showModal();
+    openPageDialog(wizardDialog);
     requestAnimationFrame(() => focusControlNaturally(wizardFields.querySelector("input, select")));
 }
 
 function closeGuestWizard() {
     wizardState.dirty = false;
-    wizardDialog.close();
+    closePageDialog(wizardDialog);
     wizardReturnFocus?.focus?.();
 }
 
@@ -995,8 +1324,8 @@ function ensureDraftCouple() {
         const id = makeGuestId("couple");
         couple = {
             id,
-            firstPerson: { id: `${id}-first`, name: "" },
-            secondPerson: { id: `${id}-second`, name: "" },
+            firstPerson: { id: `${id}-first`, name: "", notes: "" },
+            secondPerson: { id: `${id}-second`, name: "", notes: "" },
             children: []
         };
         wizardState.draft.couples.push(couple);
@@ -1044,17 +1373,23 @@ function handleDraftField(field, value) {
         wizardState.draft.relationshipGroup = value;
     }
     if (field === "coupleFirst") ensureDraftCouple().firstPerson.name = value;
+    if (field === "coupleFirstNotes") ensureDraftCouple().firstPerson.notes = value;
     if (field === "coupleSecond") ensureDraftCouple().secondPerson.name = value;
+    if (field === "coupleSecondNotes") ensureDraftCouple().secondPerson.notes = value;
     updateWizardNextState();
 }
 
 function resetBuilder() {
     wizardState.buffer = {
         personName: "",
+        personNotes: "",
         personIsChild: false,
         firstPersonName: "",
+        firstPersonNotes: "",
         secondPersonName: "",
-        childName: ""
+        secondPersonNotes: "",
+        childName: "",
+        childNotes: ""
     };
     wizardState.editingEntry = null;
 }
@@ -1071,30 +1406,37 @@ function addOrUpdatePerson(type) {
         ? buildFamilyMemberFullName(enteredName, wizardState.draft.name)
         : enteredName;
     const collection = wizardState.draft[type];
-    if (wizardState.editingEntry?.type === type) {
-        const person = collection.find(item => item.id === wizardState.editingEntry.id);
-        if (person) {
-            person.name = name;
-            if (wizardState.draft.category === "godparents") delete person.isChild;
-            else person.isChild = Boolean(wizardState.buffer.personIsChild);
+    const editingPerson = wizardState.editingEntry?.type === type
+        ? collection.find(item => item.id === wizardState.editingEntry.id)
+        : null;
+    const personId = editingPerson?.id || makeGuestId(type === "members" ? "member" : "godparent");
+    const candidate = { id: personId, name };
+    const returnFocus = wizardFields.querySelector("[data-buffer-field='personName']");
+
+    runGuestOperationWithDuplicateCheck([candidate], () => {
+        if (editingPerson) {
+            editingPerson.name = name;
+            editingPerson.notes = cleanGuestText(wizardState.buffer.personNotes);
+            if (wizardState.draft.category === "godparents") delete editingPerson.isChild;
+            else editingPerson.isChild = Boolean(wizardState.buffer.personIsChild);
+        } else {
+            const person = { id: personId, name, notes: cleanGuestText(wizardState.buffer.personNotes) };
+            if (wizardState.draft.category !== "godparents") {
+                person.isChild = Boolean(wizardState.buffer.personIsChild);
+            }
+            collection.push(person);
         }
-    } else {
-        const person = {
-            id: makeGuestId(type === "members" ? "member" : "godparent"),
-            name
-        };
-        if (wizardState.draft.category !== "godparents") person.isChild = Boolean(wizardState.buffer.personIsChild);
-        collection.push(person);
-    }
-    wizardState.dirty = true;
-    resetBuilder();
-    renderWizardFields();
-    updateWizardNextState();
-    focusControlNaturally(wizardFields.querySelector("[data-buffer-field='personName']"));
+        wizardState.dirty = true;
+        resetBuilder();
+        renderWizardFields();
+        updateWizardNextState();
+        focusControlNaturally(wizardFields.querySelector("[data-buffer-field='personName']"));
+    }, { returnFocus });
 }
 
 function resetCoupleChildBuilder() {
     wizardState.buffer.childName = "";
+    wizardState.buffer.childNotes = "";
     wizardState.editingChildId = null;
 }
 
@@ -1108,14 +1450,18 @@ function addOrUpdateCoupleChild() {
     }
 
     const couple = ensureDraftCouple();
-    saveCoupleChild(couple, wizardState.editingChildId, name);
+    const childId = wizardState.editingChildId || makeGuestId("couple-child");
+    const returnFocus = wizardFields.querySelector("#couple-child-name");
 
-    wizardState.dirty = true;
-    wizardState.coupleChildrenExpanded = true;
-    resetCoupleChildBuilder();
-    renderWizardFields();
-    updateWizardNextState();
-    focusControlNaturally(wizardFields.querySelector("#couple-child-name"));
+    runGuestOperationWithDuplicateCheck([{ id: childId, name }], () => {
+        saveCoupleChild(couple, wizardState.editingChildId, name, childId, wizardState.buffer.childNotes);
+        wizardState.dirty = true;
+        wizardState.coupleChildrenExpanded = true;
+        resetCoupleChildBuilder();
+        renderWizardFields();
+        updateWizardNextState();
+        focusControlNaturally(wizardFields.querySelector("#couple-child-name"));
+    }, { returnFocus });
 }
 
 function editCoupleChild(childId) {
@@ -1123,6 +1469,7 @@ function editCoupleChild(childId) {
     if (!child) return;
     wizardState.editingChildId = child.id;
     wizardState.buffer.childName = child.name;
+    wizardState.buffer.childNotes = child.notes || "";
     wizardState.coupleChildrenExpanded = true;
     renderWizardFields();
     focusControlNaturally(wizardFields.querySelector("#couple-child-name"));
@@ -1163,31 +1510,37 @@ function addOrUpdateCouple() {
         focusControlNaturally(wizardFields.querySelector("[data-buffer-field='firstPersonName']"));
         return;
     }
-    if (wizardState.editingEntry?.type === "couples") {
-        const couple = wizardState.draft.couples.find(item => item.id === wizardState.editingEntry.id);
-        if (couple) {
-            couple.firstPerson.name = firstPersonName;
-            couple.secondPerson.name = secondPersonName;
+    const editingCouple = wizardState.editingEntry?.type === "couples"
+        ? wizardState.draft.couples.find(item => item.id === wizardState.editingEntry.id)
+        : null;
+    const coupleId = editingCouple?.id || makeGuestId("couple");
+    const firstPersonId = editingCouple?.firstPerson.id || `${coupleId}-first`;
+    const secondPersonId = editingCouple?.secondPerson.id || `${coupleId}-second`;
+    const candidates = [
+        { id: firstPersonId, name: firstPersonName },
+        { id: secondPersonId, name: secondPersonName }
+    ];
+    const returnFocus = wizardFields.querySelector("[data-buffer-field='firstPersonName']");
+
+    runGuestOperationWithDuplicateCheck(candidates, () => {
+        if (editingCouple) {
+            editingCouple.firstPerson.name = firstPersonName;
+            editingCouple.firstPerson.notes = cleanGuestText(wizardState.buffer.firstPersonNotes);
+            editingCouple.secondPerson.name = secondPersonName;
+            editingCouple.secondPerson.notes = cleanGuestText(wizardState.buffer.secondPersonNotes);
+        } else {
+            wizardState.draft.couples.push({
+                id: coupleId,
+                firstPerson: { id: firstPersonId, name: firstPersonName, notes: cleanGuestText(wizardState.buffer.firstPersonNotes) },
+                secondPerson: { id: secondPersonId, name: secondPersonName, notes: cleanGuestText(wizardState.buffer.secondPersonNotes) }
+            });
         }
-    } else {
-        const id = makeGuestId("couple");
-        wizardState.draft.couples.push({
-            id,
-            firstPerson: {
-                id: `${id}-first`,
-                name: firstPersonName
-            },
-            secondPerson: {
-                id: `${id}-second`,
-                name: secondPersonName
-            }
-        });
-    }
-    wizardState.dirty = true;
-    resetBuilder();
-    renderWizardFields();
-    updateWizardNextState();
-    focusControlNaturally(wizardFields.querySelector("[data-buffer-field='firstPersonName']"));
+        wizardState.dirty = true;
+        resetBuilder();
+        renderWizardFields();
+        updateWizardNextState();
+        focusControlNaturally(wizardFields.querySelector("[data-buffer-field='firstPersonName']"));
+    }, { returnFocus });
 }
 
 function editGuestEntry(type, id) {
@@ -1198,9 +1551,12 @@ function editGuestEntry(type, id) {
     wizardState.builderMode = type === "members" ? wizardState.builderMode : type;
     if (type === "couples") {
         wizardState.buffer.firstPersonName = item.firstPerson.name;
+        wizardState.buffer.firstPersonNotes = item.firstPerson.notes || "";
         wizardState.buffer.secondPersonName = item.secondPerson.name;
+        wizardState.buffer.secondPersonNotes = item.secondPerson.notes || "";
     } else {
         wizardState.buffer.personName = item.name;
+        wizardState.buffer.personNotes = item.notes || "";
         wizardState.buffer.personIsChild = wizardState.draft.category !== "godparents" && Boolean(item.isChild);
     }
     renderWizardFields();
@@ -1215,8 +1571,45 @@ function removeGuestEntry(type, id) {
     updateWizardNextState();
 }
 
-function saveGuestDraft() {
-    const savedGroup = normalizeStructuredGroup(wizardState.draft);
+function getFinalDuplicateCandidates(savedGroup) {
+    return getAllGuestPeople([savedGroup]).filter(person => {
+        const normalizedName = normalizeGuestNameForComparison(person.name);
+        if (wizardState.acceptedDuplicateNamesById.get(person.id) === normalizedName) return false;
+
+        if (wizardState.mode === "create") {
+            if (savedGroup.category === "couples" && person.memberType === "couple_adult") return true;
+            if (savedGroup.category === "family" && person.memberType === "family_member") {
+                const draftPerson = getAllGuestPeople([wizardState.draft]).find(item => item.id === person.id);
+                return normalizeGuestNameForComparison(draftPerson?.name) !== normalizedName;
+            }
+            return false;
+        }
+
+        const originalName = wizardState.originalPeopleById.get(person.id);
+        return originalName !== undefined && originalName !== normalizedName;
+    });
+}
+
+function focusDuplicateCandidateForReview(candidate) {
+    if (candidate?.memberType === "couple_adult" && candidate.pairId) {
+        wizardState.activeCoupleId = candidate.pairId;
+    }
+    goToWizardStep(2);
+    requestAnimationFrame(() => {
+        let target = null;
+        if (candidate?.memberType === "couple_adult") {
+            const couple = wizardState.draft.couples.find(item => item.id === candidate.pairId);
+            target = couple?.firstPerson?.id === candidate.id
+                ? wizardFields.querySelector("#couple-first-name")
+                : wizardFields.querySelector("#couple-second-name");
+        } else if (candidate?.memberType === "family_member") {
+            target = wizardFields.querySelector("#family-name");
+        }
+        focusControlNaturally(target || wizardFields.querySelector("input, select, button"));
+    });
+}
+
+function commitGuestDraft(savedGroup) {
     if (wizardState.mode === "edit") {
         state.guests = state.guests.filter(group => group.id !== wizardState.editingId);
         const mergeTarget = savedGroup.systemKey
@@ -1229,6 +1622,7 @@ function saveGuestDraft() {
             appendUniqueGuestEntries(mergeTarget.couples, savedGroup.couples);
             appendUniqueGuestEntries(mergeTarget.individuals, savedGroup.individuals);
             mergeTarget.isClosed = mergeTarget.isClosed || savedGroup.isClosed;
+            mergeTarget.notes = savedGroup.notes || mergeTarget.notes;
         } else {
             state.guests.push(savedGroup);
         }
@@ -1239,13 +1633,16 @@ function saveGuestDraft() {
         if (existing) {
             appendUniqueGuestEntries(existing.couples, savedGroup.couples);
             appendUniqueGuestEntries(existing.individuals, savedGroup.individuals);
+            existing.notes = savedGroup.notes || existing.notes;
         } else {
             state.guests.unshift(savedGroup);
         }
     } else if (savedGroup.category === "individual_group") {
         const existing = state.guests.find(group => group.category === "individual_group" && comparableGuestText(group.name) === comparableGuestText(savedGroup.name));
-        if (existing) appendUniqueGuestEntries(existing.members, savedGroup.members);
-        else state.guests.unshift(savedGroup);
+        if (existing) {
+            appendUniqueGuestEntries(existing.members, savedGroup.members);
+            existing.notes = savedGroup.notes || existing.notes;
+        } else state.guests.unshift(savedGroup);
     } else {
         state.guests.unshift(savedGroup);
     }
@@ -1253,9 +1650,25 @@ function saveGuestDraft() {
     saveState();
     renderAll();
     wizardState.dirty = false;
-    wizardDialog.close();
+    closePageDialog(wizardDialog);
     wizardReturnFocus?.focus?.();
     showToast(wizardState.mode === "edit" ? "Alterações salvas." : "Convidados adicionados à lista.");
+}
+
+function saveGuestDraft() {
+    const savedGroup = normalizeStructuredGroup(wizardState.draft);
+    const candidates = getFinalDuplicateCandidates(savedGroup);
+    const operation = () => commitGuestDraft(savedGroup);
+
+    if (!candidates.length) {
+        operation();
+        return;
+    }
+
+    runGuestOperationWithDuplicateCheck(candidates, operation, {
+        returnFocus: wizardNext,
+        onReview: () => focusDuplicateCandidateForReview(candidates[0])
+    });
 }
 
 function goToWizardStep(step) {
@@ -1282,15 +1695,23 @@ function advanceGuestWizard() {
     if (wizardState.step === 3) saveGuestDraft();
 }
 
-function getDetailsContent(group) {
+function getGuestPeopleDetailsContent(group) {
     if (group.category === "godparents") {
         return `${group.couples.length ? `<section class="details-section"><h3>Casais de padrinhos e madrinhas</h3><ul class="details-list pair-details-list">${group.couples.map(couple => `<li>${renderCouplePresentation(couple, false)}</li>`).join("")}</ul></section>` : ""}
-            ${group.individuals.length ? `<section class="details-section"><h3>Padrinhos e madrinhas avulsos</h3><ul class="details-list">${group.individuals.map(person => `<li><span>${escapeHtml(person.name)}</span></li>`).join("")}</ul></section>` : ""}`;
+            ${group.individuals.length ? `<section class="details-section"><h3>Padrinhos e madrinhas avulsos</h3><ul class="details-list">${group.individuals.map(person => `<li>${renderPersonWithChildBadge(person)}</li>`).join("")}</ul></section>` : ""}`;
     }
     if (group.category === "couples") {
         return `<section class="details-section"><h3>Casais</h3><ul class="details-list pair-details-list">${group.couples.map(couple => `<li>${renderCouplePresentation(couple, true)}</li>`).join("")}</ul></section>`;
     }
     return `<section class="details-section"><h3>${group.category === "family" ? "Integrantes" : "Convidados"}</h3><ul class="details-list">${group.members.map(person => `<li>${renderPersonWithChildBadge(person)}</li>`).join("")}</ul></section>`;
+}
+
+function getDetailsContent(group) {
+    const peopleContent = getGuestPeopleDetailsContent(group);
+    const notesContent = group.notes
+        ? `<section class="details-section details-notes"><h3>Observações</h3><p>${escapeHtml(group.notes)}</p></section>`
+        : "";
+    return `${peopleContent}${notesContent}`;
 }
 
 function renderGuestDetails(groupId) {
@@ -1309,14 +1730,46 @@ function openGuestDetails(groupId, trigger) {
     currentDetailsGroupId = groupId;
     detailsReturnFocus = trigger || document.activeElement;
     renderGuestDetails(groupId);
-    detailsDialog.showModal();
+    openPageDialog(detailsDialog);
     requestAnimationFrame(() => document.querySelector("#close-guest-details").focus());
 }
 
 function closeGuestDetails() {
-    detailsDialog.close();
+    closePageDialog(detailsDialog);
     currentDetailsGroupId = null;
     detailsReturnFocus?.focus?.();
+}
+
+function openGroupNotesDialog(groupId, trigger) {
+    const group = state.guests.find(item => item.id === groupId);
+    if (!group) return;
+    groupNotesGroupId = group.id;
+    groupNotesReturnFocus = trigger || document.activeElement;
+    document.querySelector("#group-notes-name").textContent = group.name;
+    document.querySelector("#group-notes-input").value = group.notes || "";
+    openPageDialog(groupNotesDialog);
+    requestAnimationFrame(() => document.querySelector("#group-notes-input").focus());
+}
+
+function closeGroupNotesDialog() {
+    closePageDialog(groupNotesDialog);
+    groupNotesGroupId = null;
+    groupNotesReturnFocus?.focus?.();
+}
+
+function saveGroupNotes() {
+    const group = updateGuestGroupNotes(state.guests, groupNotesGroupId, document.querySelector("#group-notes-input").value);
+    if (!group) return;
+    const savedGroupId = group.id;
+    const previousFocus = groupNotesReturnFocus;
+    saveState();
+    closePageDialog(groupNotesDialog);
+    groupNotesGroupId = null;
+    renderAll();
+    const replacementFocus = [...guestListElement.querySelectorAll('[data-action="edit-group-notes"]')]
+        .find(button => button.dataset.id === savedGroupId);
+    focusControlNaturally(replacementFocus || (previousFocus?.isConnected ? previousFocus : null));
+    showToast(group.notes ? "Observação do grupo salva." : "Observação do grupo removida.");
 }
 
 function renderCompleteListGroup(group) {
@@ -1332,7 +1785,8 @@ function renderCompleteListGroup(group) {
                 </div>
                 ${group.isClosed ? '<span class="closed-badge"><span aria-hidden="true">✓</span> Fechado</span>' : ""}
             </header>
-            <div class="complete-list-names">${getDetailsContent(group)}</div>
+            <div class="complete-list-names">${getGuestPeopleDetailsContent(group)}</div>
+            ${group.notes ? `<p class="complete-list-notes"><strong>Observação do grupo:</strong> ${escapeHtml(group.notes)}</p>` : ""}
             <footer>
                 <button class="button button-ghost button-small" data-complete-action="view" data-id="${safeId}" type="button">Abrir grupo</button>
                 <button class="button button-text button-small" data-complete-action="edit" data-id="${safeId}" type="button">Editar grupo</button>
@@ -1368,12 +1822,12 @@ function openCompleteGuestList(trigger) {
     completeListReturnFocus = trigger || document.activeElement;
     completeListSearch.value = "";
     renderCompleteGuestList();
-    completeListDialog.showModal();
+    openPageDialog(completeListDialog);
     requestAnimationFrame(() => document.querySelector("#close-complete-guest-list").focus());
 }
 
 function closeCompleteGuestList(restoreFocus = true) {
-    completeListDialog.close();
+    closePageDialog(completeListDialog);
     if (restoreFocus) completeListReturnFocus?.focus?.();
 }
 
@@ -1393,13 +1847,13 @@ function openGuestConfirmation({ title, message, detail, acceptLabel, onAccept, 
     document.querySelector("#confirm-message").textContent = message;
     document.querySelector("#confirm-detail").textContent = detail;
     document.querySelector("#confirm-accept").textContent = acceptLabel;
-    confirmDialog.showModal();
+    openPageDialog(confirmDialog);
     requestAnimationFrame(() => document.querySelector("#confirm-cancel").focus());
 }
 
 function closeGuestConfirmation() {
     pendingConfirmation = null;
-    confirmDialog.close();
+    closePageDialog(confirmDialog);
     confirmationReturnFocus?.focus?.();
 }
 
@@ -1425,7 +1879,7 @@ function requestDeleteGuestGroup(groupId, trigger) {
 function confirmGuestAction() {
     const action = pendingConfirmation;
     pendingConfirmation = null;
-    confirmDialog.close();
+    closePageDialog(confirmDialog);
     action?.();
 }
 
@@ -1439,28 +1893,36 @@ function formatPersonForPrint(person) {
     return `${cleanGuestText(person?.name)}${person?.isChild ? " — Criança" : ""}`;
 }
 
+function renderPrintPerson(person) {
+    const notes = cleanGuestText(person?.notes);
+    return `<span class="print-person-name">${escapeHtml(formatPersonForPrint(person))}</span>${notes ? `<small class="print-person-notes">${escapeHtml(notes)}</small>` : ""}`;
+}
+
 function renderPrintGroup(group, startNumber) {
     const closed = group.isClosed ? " · Fechado" : "";
     const header = `<h2>${escapeHtml(group.name)}</h2><p class="print-group-meta">${escapeHtml(GUEST_CATEGORIES[group.category].label)}${closed} · ${pluralizeGuest(countGroupPeople(group), "pessoa", "pessoas")}</p>`;
+    const notes = group.notes
+        ? `<p class="print-group-notes"><strong>Observação do grupo:</strong> ${escapeHtml(group.notes)}</p>`
+        : "";
     let current = startNumber;
     let body = "";
     if (group.category === "godparents") {
         if (group.couples.length) {
-            body += `<h3 class="print-subtitle">Casais de padrinhos e madrinhas</h3><ol start="${current}">${group.couples.map(couple => `<li>${escapeHtml(couple.firstPerson.name)} e ${escapeHtml(couple.secondPerson.name)}</li>`).join("")}</ol>`;
+            body += `<h3 class="print-subtitle">Casais de padrinhos e madrinhas</h3><ol start="${current}">${group.couples.map(couple => `<li class="print-couple">${renderPrintPerson(couple.firstPerson)}${renderPrintPerson(couple.secondPerson)}</li>`).join("")}</ol>`;
             current += group.couples.length;
         }
         if (group.individuals.length) {
-            body += `<h3 class="print-subtitle">Padrinhos e madrinhas avulsos</h3><ol start="${current}">${group.individuals.map(person => `<li>${escapeHtml(person.name)}</li>`).join("")}</ol>`;
+            body += `<h3 class="print-subtitle">Padrinhos e madrinhas avulsos</h3><ol start="${current}">${group.individuals.map(person => `<li>${renderPrintPerson(person)}</li>`).join("")}</ol>`;
             current += group.individuals.length;
         }
     } else if (group.category === "couples") {
-        body = `<ol start="${current}">${group.couples.map(couple => `<li><span>${escapeHtml(couple.firstPerson.name)} e ${escapeHtml(couple.secondPerson.name)}</span>${couple.children?.length ? `<div class="print-couple-children"><strong>Crianças:</strong><ul>${couple.children.map(child => `<li>${escapeHtml(child.name)}</li>`).join("")}</ul></div>` : ""}</li>`).join("")}</ol>`;
+        body = `<ol start="${current}">${group.couples.map(couple => `<li class="print-couple">${renderPrintPerson(couple.firstPerson)}${renderPrintPerson(couple.secondPerson)}${couple.children?.length ? `<div class="print-couple-children"><strong>Crianças:</strong><ul>${couple.children.map(child => `<li>${renderPrintPerson(child)}</li>`).join("")}</ul></div>` : ""}</li>`).join("")}</ol>`;
         current += group.couples.length;
     } else {
-        body = `<ol start="${current}">${group.members.map(person => `<li>${escapeHtml(formatPersonForPrint(person))}</li>`).join("")}</ol>`;
+        body = `<ol start="${current}">${group.members.map(person => `<li>${renderPrintPerson(person)}</li>`).join("")}</ol>`;
         current += group.members.length;
     }
-    return { html: `<section class="print-group">${header}${body}</section>`, nextNumber: current };
+    return { html: `<section class="print-group">${header}${notes}${body}</section>`, nextNumber: current };
 }
 
 function renderGuestPrintView() {
@@ -1597,7 +2059,7 @@ wizardFields.addEventListener("keydown", event => {
         updateWizardNextState();
         return;
     }
-    if (event.key !== "Enter" || event.target.tagName === "SELECT") return;
+    if (event.key !== "Enter" || ["SELECT", "TEXTAREA"].includes(event.target.tagName)) return;
     if (!event.target.dataset.bufferField) return;
     event.preventDefault();
     if (wizardState.draft.category === "couples" && event.target.dataset.bufferField === "childName") {
@@ -1606,6 +2068,12 @@ wizardFields.addEventListener("keydown", event => {
     }
     if (wizardState.draft.category === "godparents" && wizardState.builderMode === "couples") addOrUpdateCouple();
     else addOrUpdatePerson(wizardState.draft.category === "godparents" ? "individuals" : "members");
+});
+
+guestReviewElement.addEventListener("input", event => {
+    if (event.target.dataset.reviewField !== "notes") return;
+    wizardState.draft.notes = event.target.value;
+    wizardState.dirty = true;
 });
 
 wizardNext.addEventListener("click", advanceGuestWizard);
@@ -1620,6 +2088,7 @@ guestListElement.addEventListener("click", event => {
     if (button) {
         if (button.dataset.action === "open-create") openGuestWizard(button);
         if (button.dataset.action === "view-group") openGuestDetails(button.dataset.id, button);
+        if (button.dataset.action === "edit-group-notes") openGroupNotesDialog(button.dataset.id, button);
         if (button.dataset.action === "edit-group") openGuestEdit(button.dataset.id, button);
         if (button.dataset.action === "toggle-group") toggleGuestGroup(button.dataset.id);
         if (button.dataset.action === "delete-group") requestDeleteGuestGroup(button.dataset.id, button);
@@ -1640,6 +2109,12 @@ document.querySelector("#details-edit").addEventListener("click", event => {
 });
 document.querySelector("#details-delete").addEventListener("click", event => requestDeleteGuestGroup(currentDetailsGroupId, event.currentTarget));
 
+document.querySelector("#close-group-notes").addEventListener("click", closeGroupNotesDialog);
+document.querySelector("#cancel-group-notes").addEventListener("click", closeGroupNotesDialog);
+document.querySelector("#save-group-notes").addEventListener("click", saveGroupNotes);
+groupNotesDialog.addEventListener("cancel", event => { event.preventDefault(); closeGroupNotesDialog(); });
+groupNotesDialog.addEventListener("click", event => { if (event.target === groupNotesDialog) closeGroupNotesDialog(); });
+
 document.querySelector("#close-complete-guest-list").addEventListener("click", () => closeCompleteGuestList());
 completeListDialog.addEventListener("cancel", event => { event.preventDefault(); closeCompleteGuestList(); });
 completeListDialog.addEventListener("click", event => { if (event.target === completeListDialog) closeCompleteGuestList(); });
@@ -1657,6 +2132,10 @@ document.querySelector("#confirm-cancel").addEventListener("click", closeGuestCo
 document.querySelector("#confirm-accept").addEventListener("click", confirmGuestAction);
 confirmDialog.addEventListener("cancel", event => { event.preventDefault(); closeGuestConfirmation(); });
 confirmDialog.addEventListener("click", event => { if (event.target === confirmDialog) closeGuestConfirmation(); });
+document.querySelector("#duplicate-review").addEventListener("click", () => closeGuestDuplicateDialog(true));
+document.querySelector("#duplicate-accept").addEventListener("click", confirmDuplicateGuestAction);
+duplicateDialog.addEventListener("cancel", event => { event.preventDefault(); closeGuestDuplicateDialog(true); });
+duplicateDialog.addEventListener("click", event => { if (event.target === duplicateDialog) closeGuestDuplicateDialog(true); });
 window.addEventListener("beforeprint", renderGuestPrintView);
 
 state.guests = normalizeGuestGroups(state.guests);
