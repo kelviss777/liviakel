@@ -47,11 +47,11 @@ test("normaliza convidados antigos por grupo sem perder nomes ou IDs", () => {
     assert.equal(groups[0].category, "individual_group");
     assert.equal(groups[0].name, "Igreja");
     assert.deepEqual(groups[0].members, [
-        { id: "old-1", name: "Ana Silva", isChild: false },
-        { id: "old-2", name: "Bruno", isChild: false }
+        { id: "old-1", name: "Ana Silva", notes: "", isChild: false },
+        { id: "old-2", name: "Bruno", notes: "", isChild: false }
     ]);
     assert.equal(Object.hasOwn(groups[0], "status"), false);
-    assert.deepEqual(groups[1].members, [{ id: "old-3", name: "Carla", isChild: false }]);
+    assert.deepEqual(groups[1].members, [{ id: "old-3", name: "Carla", notes: "", isChild: false }]);
 });
 
 test("conta pessoas reais em famílias, casais e padrinhos", () => {
@@ -118,7 +118,7 @@ test("normaliza família antiga preservando IDs, fechamento e capitalização do
     assert.equal(family.id, "family-old");
     assert.equal(family.name, "Família silva");
     assert.equal(family.isClosed, true);
-    assert.deepEqual(family.members, [{ id: "member-old", name: "Eduardo silva", isChild: false }]);
+    assert.deepEqual(family.members, [{ id: "member-old", name: "Eduardo silva", notes: "", isChild: false }]);
 });
 
 test("normaliza casal antigo como dois adultos e ignora classificações infantis incorretas", () => {
@@ -134,8 +134,8 @@ test("normaliza casal antigo como dois adultos e ignora classificações infanti
     const couple = read(context, "normalizeCouple(oldCouple)");
     assert.deepEqual(couple, {
         id: "pair-old",
-        firstPerson: { id: "pair-old-first", name: "João" },
-        secondPerson: { id: "pair-old-second", name: "Maria" },
+        firstPerson: { id: "pair-old-first", name: "João", notes: "" },
+        secondPerson: { id: "pair-old-second", name: "Maria", notes: "" },
         children: []
     });
 });
@@ -152,11 +152,11 @@ test("normaliza crianças vinculadas ao casal com IDs próprios e isChild verdad
     const couple = read(context, "normalizeCouple(coupleWithChildren)");
     assert.deepEqual(couple, {
         id: "pair-children",
-        firstPerson: { id: "adult-1", name: "João" },
-        secondPerson: { id: "adult-2", name: "Maria" },
+        firstPerson: { id: "adult-1", name: "João", notes: "" },
+        secondPerson: { id: "adult-2", name: "Maria", notes: "" },
         children: [
-            { id: "child-1", name: "Pedro", isChild: true },
-            { id: "child-2", name: "Ana", isChild: true }
+            { id: "child-1", name: "Pedro", notes: "", isChild: true },
+            { id: "child-2", name: "Ana", notes: "", isChild: true }
         ]
     });
 });
@@ -279,18 +279,20 @@ test("adiciona, edita e remove crianças sem duplicar ou trocar IDs", () => {
     context.draftCouple = { id: "pair-1", firstPerson: { name: "João" }, secondPerson: { name: "Maria" }, children: [] };
 
     assert.equal(vm.runInContext("saveCoupleChild(draftCouple, null, '   ')", context), null);
-    vm.runInContext("saveCoupleChild(draftCouple, null, ' Pedro '); saveCoupleChild(draftCouple, null, 'Ana')", context);
+    vm.runInContext("saveCoupleChild(draftCouple, null, ' Pedro ', null, ' 3 anos. '); saveCoupleChild(draftCouple, null, 'Ana')", context);
     const beforeEdit = read(context, "draftCouple.children");
     assert.equal(beforeEdit.length, 2);
     assert.equal(beforeEdit[0].name, "Pedro");
+    assert.equal(beforeEdit[0].notes, "3 anos.");
     assert.equal(beforeEdit[0].isChild, true);
 
     context.preservedChildId = beforeEdit[0].id;
-    vm.runInContext("saveCoupleChild(draftCouple, preservedChildId, 'Pedro Henrique')", context);
+    vm.runInContext("saveCoupleChild(draftCouple, preservedChildId, 'Pedro Henrique', null, '')", context);
     const afterEdit = read(context, "draftCouple.children");
     assert.equal(afterEdit.length, 2);
     assert.equal(afterEdit[0].id, beforeEdit[0].id);
     assert.equal(afterEdit[0].name, "Pedro Henrique");
+    assert.equal(afterEdit[0].notes, "");
 
     context.removedChildId = afterEdit[1].id;
     assert.equal(vm.runInContext("removeCoupleChildFromCouple(draftCouple, removedChildId)", context), true);
@@ -465,7 +467,7 @@ test("casal oferece seção acessível para uma ou mais crianças", () => {
     assert.match(guestSource, /function addOrUpdateCoupleChild\(\)/);
     assert.match(guestSource, /function editCoupleChild\(childId\)/);
     assert.match(guestSource, /function removeCoupleChild\(childId\)/);
-    assert.match(guestSource, /saveCoupleChild\(couple, wizardState\.editingChildId, name\)/);
+    assert.match(guestSource, /saveCoupleChild\(couple, wizardState\.editingChildId, name, childId, wizardState\.buffer\.childNotes\)/);
     assert.match(guestSource, /data-couple-action="select"/);
     assert.match(guestSource, /function selectDraftCouple\(coupleId\)/);
     assert.match(guestSource, /wizardState\.activeCoupleId = couple\.id/);
@@ -507,6 +509,11 @@ test("documentação descreve o modelo local e o mapeamento futuro sem executar 
     assert.match(guestDocumentation, /`pair_id`/);
     assert.match(guestDocumentation, /`household_id`/);
     assert.match(guestDocumentation, /`couple_child`/);
+    assert.match(guestDocumentation, /`guest_groups\.notes`/);
+    assert.match(guestDocumentation, /`TEXT NOT NULL DEFAULT ''`/);
+    assert.match(guestDocumentation, /`normalizeGuestNameForComparison\(name\)`/);
+    assert.match(guestDocumentation, /`getAllGuestPeople\(groups\)`/);
+    assert.match(guestDocumentation, /Duplicados nunca são bloqueados/);
     assert.doesNotMatch(guestDocumentation, /`child_couple`/);
     assert.match(guestDocumentation, /RLS futura/);
     assert.doesNotMatch(guestDocumentation, /CREATE\s+TABLE|ALTER\s+TABLE|CREATE\s+POLICY/i);
@@ -537,4 +544,297 @@ test("persistência continua local e não chama Supabase ou backend", () => {
     assert.doesNotMatch(guestSource, /supabase|fetch\(|XMLHttpRequest|createCurrentWeddingGuest|updateCurrentWeddingGuest/i);
     assert.match(guestSource, /state\.guests = normalizeGuestGroups\(state\.guests\)/);
     assert.doesNotMatch(guestSource, /state\.guests = normalizeGuestGroups\(state\.guests\);\s*saveState\(\)/);
+});
+
+test("normaliza nomes para comparação sem alterar o valor visual", () => {
+    const context = loadGuestLogic();
+
+    assert.equal(vm.runInContext("normalizeGuestNameForComparison('  João   Silva  ')", context), "joao silva");
+    assert.equal(vm.runInContext("normalizeGuestNameForComparison('JOAO SILVA')", context), "joao silva");
+    assert.equal(vm.runInContext("getGuestNameMatchLevel('João Silva', 'joao  silva')", context), "exact");
+    assert.equal(vm.runInContext("getGuestNameMatchLevel('João Pedro Silva', 'Joao P. Silva')", context), "similar");
+    assert.equal(vm.runInContext("getGuestNameMatchLevel('João Silva', 'Maria Silva')", context), null);
+});
+
+test("percorre todas as pessoas com contexto reutilizável", () => {
+    const context = loadGuestLogic();
+    context.allKinds = [{
+        id: "family", name: "Família Silva", category: "family",
+        members: [{ id: "family-person", name: "Ana Silva", isChild: false }]
+    }, {
+        id: "couples", name: "Casais", category: "couples",
+        couples: [{
+            id: "pair", firstPerson: { id: "adult-1", name: "Bia" }, secondPerson: { id: "adult-2", name: "Caio" },
+            children: [{ id: "child", name: "Duda", isChild: true }]
+        }]
+    }, {
+        id: "godparents", name: "Padrinhos & Madrinhas", category: "godparents",
+        couples: [{ id: "god-pair", firstPerson: { id: "god-1", name: "Eva" }, secondPerson: { id: "god-2", name: "Fred" } }],
+        individuals: [{ id: "god-3", name: "Gabi" }]
+    }, {
+        id: "friends", name: "Amigos", category: "individual_group",
+        members: [{ id: "friend", name: "Hugo", isChild: false }]
+    }];
+
+    const people = read(context, "getAllGuestPeople(allKinds)");
+    assert.equal(people.length, 8);
+    assert.deepEqual(people.find(person => person.id === "child"), {
+        id: "child", name: "Duda", isChild: true, pairId: null, householdId: "pair",
+        memberType: "couple_child", groupId: "couples", groupName: "Casais", category: "couples"
+    });
+    assert.equal(people.find(person => person.id === "god-1").memberType, "godparent_couple");
+    assert.equal(people.find(person => person.id === "friend").memberType, "individual_guest");
+});
+
+test("detector encontra equivalências, ignora a própria pessoa e mantém casais separados", () => {
+    const context = loadGuestLogic();
+    context.existingGroups = [{
+        id: "family", name: "Família Silva", category: "family",
+        members: [
+            { id: "joao", name: "João Silva", isChild: false },
+            { id: "maria", name: "Maria Souza", isChild: false }
+        ]
+    }];
+    context.oneCandidate = [{ id: "new-joao", name: " JOAO   SILVA " }];
+    context.pairWithOneMatch = [{ id: "pair-first", name: "João Silva" }, { id: "pair-second", name: "Beatriz Lima" }];
+    context.twoCandidates = [{ id: "pair-first", name: "João Silva" }, { id: "pair-second", name: "Maria Souza" }];
+
+    const oneResult = read(context, "findPotentialGuestDuplicates(oneCandidate, existingGroups)");
+    assert.equal(oneResult.length, 1);
+    assert.equal(oneResult[0].matches[0].id, "joao");
+    assert.equal(oneResult[0].matches[0].level, "exact");
+
+    const twoResults = read(context, "findPotentialGuestDuplicates(twoCandidates, existingGroups)");
+    assert.deepEqual(read(context, "findPotentialGuestDuplicates(pairWithOneMatch, existingGroups).map(result => result.candidate.id)"), ["pair-first"]);
+    assert.deepEqual(twoResults.map(result => result.candidate.id), ["pair-first", "pair-second"]);
+    assert.deepEqual(read(context, "findPotentialGuestDuplicates([{ id: 'joao', name: 'João Silva' }], existingGroups)"), []);
+    assert.equal(read(context, "findPotentialGuestDuplicates([{ id: 'first', name: 'Alex' }, { id: 'second', name: 'Alex' }], [])").length, 0);
+});
+
+test("edição ignora o próprio ID, mas encontra homônimo em outro grupo", () => {
+    const context = loadGuestLogic();
+    context.sameNames = [{
+        id: "group-a", name: "Família A", category: "family",
+        members: [{ id: "person-a", name: "Carlos Silva" }]
+    }, {
+        id: "group-b", name: "Igreja", category: "individual_group",
+        members: [{ id: "person-b", name: "Carlos Silva" }]
+    }];
+
+    const results = read(context, "findPotentialGuestDuplicates([{ id: 'person-a', name: 'Carlos Silva' }], sameNames)");
+    assert.equal(results.length, 1);
+    assert.deepEqual(results[0].matches.map(match => match.id), ["person-b"]);
+});
+
+test("notes é opcional, retrocompatível e preservado em grupo fechado", () => {
+    const context = loadGuestLogic();
+    context.oldGroup = {
+        schemaVersion: 4, id: "old", category: "family", name: "Silva", isClosed: true,
+        members: [{ id: "member", name: "Ana" }]
+    };
+    context.notedGroup = { ...context.oldGroup, notes: "  Vêm de outra cidade.  " };
+
+    assert.equal(read(context, "normalizeStructuredGroup(oldGroup)").notes, "");
+    const noted = read(context, "normalizeStructuredGroup(notedGroup)");
+    assert.equal(noted.notes, "Vêm de outra cidade.");
+    assert.equal(noted.isClosed, true);
+    assert.match(guestSource, /data-review-field="notes"/);
+    assert.match(guestSource, /group\.notes\s*\? `<section class="details-section details-notes"/);
+    assert.match(guestSource, /class="complete-list-notes"/);
+    assert.match(guestSource, /class="print-group-notes"/);
+});
+
+test("normaliza notes de toda pessoa sem misturar com a observação do grupo", () => {
+    const context = loadGuestLogic();
+    context.family = {
+        id: "family", category: "family", name: "Silva", notes: "  Parentes da noiva. ",
+        members: [{ id: "member", name: "Beatriz", notes: " Vegetariana. " }, { id: "old-member", name: "Samira" }]
+    };
+    context.couples = {
+        id: "couples", category: "couples", name: "Casais", notes: "",
+        couples: [{
+            id: "pair",
+            firstPerson: { id: "first", name: "João", notes: " Vem de longe. " },
+            secondPerson: { id: "second", name: "Maria", notes: "Prima da noiva." },
+            children: [{ id: "child", name: "Pedro", notes: " 3 anos. " }]
+        }]
+    };
+    context.godparents = {
+        id: "godparents", category: "godparents", name: "Padrinhos & Madrinhas",
+        couples: [{ id: "god-pair", firstPerson: { id: "god-1", name: "Eva", notes: "Amiga de infância." }, secondPerson: { id: "god-2", name: "Fred" } }],
+        individuals: [{ id: "god-3", name: "Lucas", notes: " Entrará sozinho. " }]
+    };
+
+    const family = read(context, "normalizeStructuredGroup(family)");
+    const couples = read(context, "normalizeStructuredGroup(couples)");
+    const godparents = read(context, "normalizeStructuredGroup(godparents)");
+
+    assert.equal(family.notes, "Parentes da noiva.");
+    assert.equal(family.members[0].notes, "Vegetariana.");
+    assert.equal(family.members[1].notes, "");
+    assert.equal(couples.couples[0].firstPerson.notes, "Vem de longe.");
+    assert.equal(couples.couples[0].secondPerson.notes, "Prima da noiva.");
+    assert.equal(couples.couples[0].children[0].notes, "3 anos.");
+    assert.equal(couples.couples[0].children[0].isChild, true);
+    assert.equal(godparents.couples[0].firstPerson.notes, "Amiga de infância.");
+    assert.equal(godparents.couples[0].secondPerson.notes, "");
+    assert.equal(godparents.individuals[0].notes, "Entrará sozinho.");
+    assert.equal(Object.hasOwn(godparents.individuals[0], "isChild"), false);
+});
+
+test("editar observação pelo cartão altera somente group.notes e mantém grupo fechado", () => {
+    const context = loadGuestLogic();
+    context.groups = [{
+        id: "closed-group", name: "Família Silva", notes: "Antiga", isClosed: true,
+        category: "family", members: [{ id: "member", name: "Ana Silva", notes: "Vegetariana.", isChild: false }]
+    }];
+
+    const updated = read(context, "updateGuestGroupNotes(groups, 'closed-group', '  Nova observação.  ')");
+    assert.equal(updated.notes, "Nova observação.");
+    assert.equal(updated.isClosed, true);
+    assert.equal(updated.members[0].id, "member");
+    assert.equal(updated.members[0].notes, "Vegetariana.");
+    assert.equal(vm.runInContext("updateGuestGroupNotes(groups, 'missing', 'x')", context), null);
+
+    const cleared = read(context, "updateGuestGroupNotes(groups, 'closed-group', '   ')");
+    assert.equal(cleared.notes, "");
+    assert.equal(cleared.isClosed, true);
+});
+
+test("interface oferece observação individual em todos os fluxos e observação de grupo isolada", () => {
+    assert.match(guestSource, /function normalizeGuestPerson\(/);
+    assert.match(guestSource, /data-buffer-field="personNotes"/);
+    assert.match(guestSource, /data-buffer-field="firstPersonNotes"/);
+    assert.match(guestSource, /data-buffer-field="secondPersonNotes"/);
+    assert.match(guestSource, /data-draft-field="coupleFirstNotes"/);
+    assert.match(guestSource, /data-draft-field="coupleSecondNotes"/);
+    assert.match(guestSource, /data-buffer-field="childNotes"/);
+    assert.match(guestSource, /editingPerson\.notes = cleanGuestText\(wizardState\.buffer\.personNotes\)/);
+    assert.match(guestSource, /editingCouple\.firstPerson\.notes/);
+    assert.match(guestSource, /editingCouple\.secondPerson\.notes/);
+    assert.match(guestHtml, /<dialog class="group-notes-dialog" id="group-notes-dialog"/);
+    assert.match(guestHtml, /Observação do grupo/);
+    assert.match(guestSource, /data-action="edit-group-notes"/);
+    assert.match(guestSource, /function saveGroupNotes\(\)[\s\S]*?updateGuestGroupNotes\(state\.guests, groupNotesGroupId/);
+    assert.match(guestSource, /group\.notes \? "Editar observação do grupo" : "\+ Adicionar observação ao grupo"/);
+});
+
+test("detalhes, lista completa e PDF associam notes à pessoa e quebram no mobile", () => {
+    assert.match(guestSource, /class="person-detail-notes"/);
+    assert.match(guestSource, /renderPersonWithChildBadge\(couple\.firstPerson\)/);
+    assert.match(guestSource, /renderPersonWithChildBadge\(couple\.secondPerson\)/);
+    assert.match(guestSource, /class="print-person-notes"/);
+    assert.match(guestSource, /Observação do grupo:<\/strong>/);
+    assert.match(guestCss, /\.person-detail-row \{[^}]*grid-template-columns: minmax\(0, 1fr\)/);
+    assert.match(guestCss, /@media \(max-width: 580px\)[\s\S]*?\.person-detail-row \{ grid-template-columns: 1fr;/);
+    assert.match(guestCss, /\.person-detail-notes \{[^}]*overflow-wrap: anywhere;[^}]*white-space: pre-wrap;/);
+    assert.match(guestCss, /\.group-notes-dialog footer \{ align-items: stretch; flex-direction: column-reverse;/);
+});
+
+test("bloqueio de scroll preserva posição, compensa scrollbar e só libera sem dialogs abertos", () => {
+    const context = loadGuestLogic();
+    const rootClasses = new Set();
+    const bodyClasses = new Set();
+    const makeClassList = values => ({
+        add(value) { values.add(value); },
+        remove(value) { values.delete(value); },
+        contains(value) { return values.has(value); }
+    });
+    context.openDialog = { open: true };
+    context.scrollCalls = [];
+    context.document = {
+        documentElement: { clientWidth: 1180, style: { overflow: "" }, classList: makeClassList(rootClasses) },
+        body: {
+            style: { position: "", top: "", left: "", right: "", width: "", overflow: "", paddingRight: "" },
+            classList: makeClassList(bodyClasses)
+        },
+        querySelector() { return context.openDialog; }
+    };
+    context.window = {
+        innerWidth: 1200, scrollX: 4, scrollY: 640,
+        getComputedStyle() { return { paddingRight: "6px" }; },
+        scrollTo(x, y) { context.scrollCalls.push([x, y]); }
+    };
+
+    vm.runInContext("lockPageScroll()", context);
+    assert.equal(context.document.body.style.position, "fixed");
+    assert.equal(context.document.body.style.top, "-640px");
+    assert.equal(context.document.body.style.left, "-4px");
+    assert.equal(context.document.body.style.paddingRight, "26px");
+    assert.equal(rootClasses.has("guest-dialog-scroll-lock"), true);
+
+    context.window.scrollY = 900;
+    vm.runInContext("syncPageScrollLock()", context);
+    assert.equal(context.document.body.style.top, "-640px");
+    assert.equal(context.scrollCalls.length, 0);
+
+    context.openDialog = null;
+    vm.runInContext("syncPageScrollLock()", context);
+    assert.deepEqual(context.scrollCalls, [[4, 640]]);
+    assert.equal(context.document.body.style.position, "");
+    assert.equal(context.document.body.style.paddingRight, "");
+    assert.equal(rootClasses.has("guest-dialog-scroll-lock"), false);
+});
+
+test("todos os dialogs usam gerência central e ficam centralizados com scroll interno", () => {
+    assert.match(guestSource, /function lockPageScroll\(\)/);
+    assert.match(guestSource, /function unlockPageScroll\(\)/);
+    assert.match(guestSource, /function syncPageScrollLock\(\)/);
+    assert.match(guestSource, /document\.querySelector\("dialog\[open\]"\)/);
+    assert.match(guestSource, /MutationObserver/);
+    assert.match(guestSource, /attributeFilter: \["open"\]/);
+    assert.match(guestSource, /touchmove[\s\S]*?passive: false/);
+    assert.equal((guestSource.match(/\.showModal\(\)/g) || []).length, 1);
+    assert.match(guestCss, /body\[data-page="convidados"\] dialog\[open\] \{[\s\S]*?position: fixed;[\s\S]*?100dvh[\s\S]*?margin: auto;/);
+    assert.match(guestCss, /dialog::backdrop \{ position: fixed; inset: 0; \}/);
+    assert.match(guestCss, /\.group-notes-dialog form \{[^}]*grid-template-rows: auto minmax\(0, 1fr\) auto;[^}]*overflow: hidden;/);
+    assert.match(guestCss, /\.group-notes-content \{[^}]*overflow-y: auto;[^}]*overscroll-behavior: contain;/);
+    assert.doesNotMatch(guestCss, /margin-bottom: 8px/);
+});
+
+test("modal de duplicidade é nativo, acessível e permite revisar ou aceitar", () => {
+    assert.match(guestHtml, /<dialog class="duplicate-dialog" id="guest-duplicate-dialog"/);
+    assert.match(guestHtml, /aria-labelledby="duplicate-title"/);
+    assert.match(guestHtml, /Possível convidado duplicado/);
+    assert.match(guestHtml, /Voltar e revisar/);
+    assert.match(guestHtml, /Adicionar mesmo assim/);
+    assert.match(guestSource, /pendingDuplicateAction = null/);
+    assert.match(guestSource, /duplicateDialog\.addEventListener\("cancel"/);
+    assert.match(guestSource, /duplicateReturnFocus\?\.focus\?\.\(\)/);
+    assert.match(guestSource, /runGuestOperationWithDuplicateCheck\(\[candidate\]/);
+    assert.match(guestSource, /runGuestOperationWithDuplicateCheck\(candidates/);
+    assert.match(guestSource, /function addOrUpdateCoupleChild\(\)[\s\S]*?runGuestOperationWithDuplicateCheck\(\[\{ id: childId, name \}\]/);
+    assert.match(guestSource, /function addOrUpdateCouple\(\)[\s\S]*?runGuestOperationWithDuplicateCheck\(candidates/);
+    assert.match(guestSource, /person\.memberType === "couple_adult"/);
+    assert.match(guestSource, /savedGroup\.category === "family" && person\.memberType === "family_member"/);
+    assert.doesNotMatch(guestSource, /window\.confirm\(/);
+    assert.match(guestCss, /@media \(max-width: 760px\)/);
+    assert.match(guestCss, /\.duplicate-dialog footer \{ align-items: stretch; flex-direction: column-reverse; \}/);
+});
+
+test("revisar mantém o rascunho e aceitar executa a operação somente uma vez", () => {
+    const dialogLogic = guestSource.slice(
+        guestSource.indexOf("function closeGuestDuplicateDialog"),
+        guestSource.indexOf("function runGuestOperationWithDuplicateCheck")
+    );
+    const context = vm.createContext({
+        pendingDuplicateAction: null,
+        duplicateReviewAction: null,
+        duplicateReturnFocus: null,
+        duplicateDialog: { closeCalls: 0, close() { this.closeCalls += 1; } },
+        closePageDialog(dialog) { dialog.close(); },
+        wizardState: { buffer: { personName: "João Silva" } },
+        focusCalls: 0,
+        operationCalls: 0
+    });
+    vm.runInContext(dialogLogic, context);
+
+    context.duplicateReturnFocus = { focus() { context.focusCalls += 1; } };
+    vm.runInContext("closeGuestDuplicateDialog(true)", context);
+    assert.equal(context.wizardState.buffer.personName, "João Silva");
+    assert.equal(context.focusCalls, 1);
+
+    context.pendingDuplicateAction = () => { context.operationCalls += 1; };
+    vm.runInContext("confirmDuplicateGuestAction(); confirmDuplicateGuestAction();", context);
+    assert.equal(context.operationCalls, 1);
 });
