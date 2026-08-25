@@ -86,6 +86,7 @@ const GUEST_MEMBER_TYPES = new Set([
     "godparent_couple",
     "godparent_individual"
 ]);
+const GUEST_GROUP_CATEGORIES = new Set(["godparents", "family", "individual_group", "couples"]);
 
 function createGuestSupabaseError(error, fallbackMessage, code) {
     if (isSupabasePermissionError(error)) {
@@ -118,14 +119,22 @@ function mapGuestGroupRowToLocal(record = {}) {
 }
 
 function mapGuestGroupToDatabase(group = {}) {
+    const category = String(group.category ?? "").trim();
+    const name = String(group.name ?? "").trim();
+    if (!GUEST_GROUP_CATEGORIES.has(category) || !name) {
+        throw createSupabaseAppError(
+            "O grupo precisa ter categoria e nome válidos.",
+            "GUEST_GROUP_VALIDATION_FAILED"
+        );
+    }
     const sortOrder = group.sortOrder === null || group.sortOrder === undefined || group.sortOrder === ""
         ? null
         : Number(group.sortOrder);
     return {
-        category: String(group.category ?? "").trim(),
-        name: String(group.name ?? "").trim(),
-        relationship_group: String(group.relationshipGroup ?? "").trim() || null,
-        notes: String(group.notes ?? "").trim() || null,
+        category,
+        name,
+        relationship_group: String(group.relationshipGroup ?? "").trim(),
+        notes: String(group.notes ?? "").trim(),
         is_closed: group.isClosed === true,
         is_system: group.isSystem === true,
         system_key: String(group.systemKey ?? "").trim() || null,
@@ -171,12 +180,19 @@ function mapGuestMemberToDatabase(member = {}) {
             "GUEST_MEMBER_TYPE_INVALID"
         );
     }
+    const name = String(member.name ?? "").trim();
+    if (!name) {
+        throw createSupabaseAppError(
+            "O integrante precisa ter um nome válido.",
+            "GUEST_MEMBER_NAME_REQUIRED"
+        );
+    }
     const sortOrder = member.sortOrder === null || member.sortOrder === undefined || member.sortOrder === ""
         ? null
         : Number(member.sortOrder);
     return {
-        name: String(member.name ?? "").trim(),
-        notes: String(member.notes ?? "").trim() || null,
+        name,
+        notes: String(member.notes ?? "").trim(),
         is_child: member.isChild === true,
         member_type: memberType,
         pair_id: guestUuidForDatabase(member.pairId, "pair_id"),
@@ -677,7 +693,7 @@ async function updateCurrentWeddingGuestGroupNotes(groupId, notes) {
     const { weddingId } = await resolveCurrentWeddingContext();
     const { data, error } = await client
         .from("guest_groups")
-        .update({ notes: String(notes ?? "").trim() || null })
+        .update({ notes: String(notes ?? "").trim() })
         .eq("id", groupId)
         .eq("wedding_id", weddingId)
         .select("*")
