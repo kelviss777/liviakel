@@ -1,8 +1,16 @@
 const VENUE_DETAIL_DEFAULTS = Object.freeze({
+    customType: null,
     description: "",
     rating: null,
+    pricingType: "unknown",
     budgetValue: null,
     depositValue: null,
+    pricePerAdult: null,
+    childPricingType: "unknown",
+    pricePerChild: null,
+    childAgeLimit: null,
+    includedGuests: null,
+    extraGuestPrice: null,
     decorationOption: "unknown",
     hasBridalRoom: false,
     capacity: null,
@@ -29,6 +37,20 @@ const SPACE_LABELS = {
     unknown: "Ainda não informado"
 };
 
+const PRICING_TYPE_LABELS = {
+    fixed: "Valor fixo / pacote",
+    per_person: "Por pessoa",
+    fixed_plus_per_person: "Fixo + valor por pessoa",
+    unknown: "Ainda não informado"
+};
+
+const CHILD_PRICING_LABELS = {
+    free: "Crianças não pagam",
+    same_as_adult: "Mesmo valor do adulto",
+    custom: "Valor infantil personalizado",
+    unknown: "Ainda não informado"
+};
+
 const venueForm = document.querySelector("#venue-form");
 const venueFormCard = document.querySelector("#venue-form-card");
 const venueDetailsToggle = document.querySelector("#venue-details-toggle");
@@ -41,12 +63,25 @@ const clearRatingButton = document.querySelector("#clear-venue-rating");
 const ratingStatus = document.querySelector("#venue-rating-status");
 const budgetInput = document.querySelector("#venue-budget");
 const depositInput = document.querySelector("#venue-deposit");
+const pricingTypeInputs = [...document.querySelectorAll("input[name='pricingType']")];
+const pricePerAdultInput = document.querySelector("#venue-price-adult");
+const childPricingInput = document.querySelector("#venue-child-pricing");
+const pricePerChildInput = document.querySelector("#venue-price-child");
+const childAgeLimitInput = document.querySelector("#venue-child-age-limit");
+const includedGuestsToggle = document.querySelector("#venue-included-toggle");
+const includedGuestsInput = document.querySelector("#venue-included-guests");
+const extraGuestPriceInput = document.querySelector("#venue-extra-guest-price");
+const financialStatus = document.querySelector("#venue-financial-status");
 const depositError = document.querySelector("#venue-deposit-error");
 const budgetRemaining = document.querySelector("#venue-budget-remaining");
 const venueSubmitButton = document.querySelector("#venue-submit-button");
 const cancelVenueEditButton = document.querySelector("#cancel-venue-edit");
 const venueEditNotice = document.querySelector("#venue-edit-notice");
 const confirmVenueDeleteButton = document.querySelector("#confirm-venue-delete");
+const venueTypeInput = document.querySelector("#venue-type");
+const venueCustomTypeField = document.querySelector("#venue-custom-type-field");
+const venueCustomTypeInput = document.querySelector("#venue-custom-type");
+const venueSearchInput = document.querySelector("#venue-search");
 
 const LIST_EDITOR_CONFIG = {
     pros: {
@@ -129,6 +164,26 @@ function cloneStructuredList(items) {
 
 function normalizeVenue(venue = {}) {
     const rating = optionalNumber(venue.rating, { integer: true, maximum: 5 });
+    const budgetValue = optionalNumber(venue.budgetValue);
+    const hasExplicitPricingType = venue.pricingType !== null && venue.pricingType !== undefined;
+    const pricingType = Object.hasOwn(PRICING_TYPE_LABELS, venue.pricingType)
+        ? venue.pricingType
+        : (!hasExplicitPricingType && hasValue(budgetValue) ? "fixed" : "unknown");
+    const childPricingType = Object.hasOwn(CHILD_PRICING_LABELS, venue.childPricingType)
+        ? venue.childPricingType
+        : "unknown";
+    const includedGuests = optionalNumber(venue.includedGuests, { integer: true });
+    let pricePerChild = optionalNumber(venue.pricePerChild);
+    let childAgeLimit = optionalNumber(venue.childAgeLimit, { integer: true, maximum: 17 });
+    let extraGuestPrice = optionalNumber(venue.extraGuestPrice);
+
+    if (childPricingType === "same_as_adult" || childPricingType === "unknown") {
+        pricePerChild = null;
+        childAgeLimit = null;
+    } else if (childPricingType === "free") {
+        pricePerChild = null;
+    }
+    if (includedGuests === null) extraGuestPrice = null;
     const decorationOption = Object.hasOwn(DECORATION_LABELS, venue.decorationOption)
         ? venue.decorationOption
         : VENUE_DETAIL_DEFAULTS.decorationOption;
@@ -136,17 +191,28 @@ function normalizeVenue(venue = {}) {
         ? venue.spaceAvailability
         : VENUE_DETAIL_DEFAULTS.spaceAvailability;
 
+    const type = normalizeText(venue.type).trim();
+    const customTypeText = normalizeText(venue.customType).trim();
+
     return {
         ...VENUE_DETAIL_DEFAULTS,
         ...venue,
         name: normalizeText(venue.name),
-        type: normalizeText(venue.type),
+        type,
+        customType: type === "Outro" && customTypeText ? customTypeText : null,
         address: normalizeText(venue.address),
         favorite: Boolean(venue.favorite),
         description: normalizeText(venue.description),
         rating: rating && rating >= 1 ? rating : null,
-        budgetValue: optionalNumber(venue.budgetValue),
+        pricingType,
+        budgetValue,
         depositValue: optionalNumber(venue.depositValue),
+        pricePerAdult: optionalNumber(venue.pricePerAdult),
+        childPricingType,
+        pricePerChild,
+        childAgeLimit,
+        includedGuests,
+        extraGuestPrice,
         decorationOption,
         hasBridalRoom: venue.hasBridalRoom === true,
         capacity: optionalNumber(venue.capacity, { integer: true }),
@@ -160,6 +226,11 @@ function normalizeVenue(venue = {}) {
     };
 }
 
+function getVenueDisplayType(venue) {
+    const item = normalizeVenue(venue);
+    return item.type === "Outro" && item.customType ? item.customType : item.type;
+}
+
 function hasValue(value) {
     return value !== null && value !== undefined && value !== "";
 }
@@ -169,8 +240,15 @@ function hasDetailedInfo(venue) {
     return Boolean(
         item.description.trim() ||
         item.rating ||
+        item.pricingType !== "unknown" ||
         hasValue(item.budgetValue) ||
         hasValue(item.depositValue) ||
+        hasValue(item.pricePerAdult) ||
+        item.childPricingType !== "unknown" ||
+        hasValue(item.pricePerChild) ||
+        hasValue(item.childAgeLimit) ||
+        hasValue(item.includedGuests) ||
+        hasValue(item.extraGuestPrice) ||
         item.decorationOption !== "unknown" ||
         item.hasBridalRoom ||
         hasValue(item.capacity) ||
@@ -184,6 +262,44 @@ function hasDetailedInfo(venue) {
     );
 }
 
+function formatVenuePricingType(pricingType) {
+    return PRICING_TYPE_LABELS[pricingType] || PRICING_TYPE_LABELS.unknown;
+}
+
+function formatChildPricingRule(venue) {
+    const item = normalizeVenue(venue);
+    if (item.childPricingType === "unknown") return CHILD_PRICING_LABELS.unknown;
+    if (item.childPricingType === "same_as_adult") return CHILD_PRICING_LABELS.same_as_adult;
+
+    const ageSuffix = hasValue(item.childAgeLimit)
+        ? ` até ${item.childAgeLimit} ${item.childAgeLimit === 1 ? "ano" : "anos"}`
+        : "";
+    if (item.childPricingType === "free") return `Crianças não pagam${ageSuffix}`;
+    if (hasValue(item.pricePerChild)) return `${formatCurrency(item.pricePerChild)} por criança${ageSuffix}`;
+    return `${CHILD_PRICING_LABELS.custom}${ageSuffix}`;
+}
+
+function getVenuePricingSummary(venue) {
+    const item = normalizeVenue(venue);
+    const parts = [];
+
+    if (item.pricingType === "fixed" && hasValue(item.budgetValue)) {
+        parts.push(`${formatCurrency(item.budgetValue)} pacote`);
+    }
+    if (item.pricingType === "per_person" && hasValue(item.pricePerAdult)) {
+        parts.push(`${formatCurrency(item.pricePerAdult)} por adulto`);
+    }
+    if (item.pricingType === "fixed_plus_per_person") {
+        if (hasValue(item.budgetValue)) parts.push(`${formatCurrency(item.budgetValue)} base`);
+        if (hasValue(item.pricePerAdult)) parts.push(`+ ${formatCurrency(item.pricePerAdult)} por adulto`);
+    }
+    if (!parts.length && hasValue(item.budgetValue)) parts.push(`${formatCurrency(item.budgetValue)} valor informado`);
+    if (hasValue(item.includedGuests)) {
+        parts.push(`${new Intl.NumberFormat("pt-BR").format(item.includedGuests)} convidados inclusos`);
+    }
+    return parts;
+}
+
 function getVenueById(id) {
     return state.venues.find(item => String(item.id) === String(id));
 }
@@ -194,14 +310,22 @@ function renderVenueHighlights(venue) {
     if (venue.rating) {
         highlights.push(`<span class="venue-highlight rating" aria-label="${venue.rating} de 5 estrelas">★ ${venue.rating}/5</span>`);
     }
-    if (hasValue(venue.budgetValue)) {
-        highlights.push(`<span class="venue-highlight">${escapeHtml(formatCurrency(venue.budgetValue))}</span>`);
-    }
     if (hasValue(venue.capacity)) {
         highlights.push(`<span class="venue-highlight">Até ${escapeHtml(new Intl.NumberFormat("pt-BR").format(venue.capacity))} pessoas</span>`);
     }
+    getVenuePricingSummary(venue).slice(0, 3).forEach(summary => {
+        highlights.push(`<span class="venue-highlight financial">${escapeHtml(summary)}</span>`);
+    });
 
     return highlights.length ? `<div class="venue-highlights">${highlights.join("")}</div>` : "";
+}
+
+function venueSearchKey(value) {
+    return String(value ?? "")
+        .trim()
+        .toLocaleLowerCase("pt-BR")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
 }
 
 function renderVenues() {
@@ -213,8 +337,16 @@ function renderVenues() {
         return;
     }
 
+    const searchKey = venueSearchKey(venueSearchInput.value);
     const venues = [...state.venues]
         .map(normalizeVenue)
+        .filter(venue => !searchKey || [
+            venue.name,
+            venue.type,
+            venue.customType,
+            getVenueDisplayType(venue),
+            venue.address
+        ].some(value => venueSearchKey(value).includes(searchKey)))
         .sort((a, b) => Number(b.favorite) - Number(a.favorite) || a.name.localeCompare(b.name, "pt-BR"));
 
     venueList.innerHTML = venues.length ? venues.map(venue => {
@@ -229,7 +361,7 @@ function renderVenues() {
         return `
             <article class="venue-card ${venue.favorite ? "favorite" : ""}">
                 <div class="venue-card-top">
-                    <span class="venue-type">${escapeHtml(venue.type)}</span>
+                    <span class="venue-type">${escapeHtml(getVenueDisplayType(venue))}</span>
                     <button class="favorite-button ${venue.favorite ? "active" : ""}" data-action="toggle-favorite" data-id="${id}" type="button" aria-label="${venue.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}" title="${venue.favorite ? "Remover dos favoritos" : "Favoritar"}" ${favoriteUpdating ? 'disabled aria-busy="true"' : ""}>★</button>
                 </div>
                 <h3>${name}</h3>
@@ -246,7 +378,9 @@ function renderVenues() {
                     </div>
                 </div>
             </article>`;
-    }).join("") : emptyState("Adicione o primeiro local que vocês estão considerando.");
+    }).join("") : emptyState(searchKey
+        ? "Nenhum local corresponde à busca."
+        : "Adicione o primeiro local que vocês estão considerando.");
 }
 
 function renderAll() {
@@ -420,6 +554,11 @@ function parseFormNumber(input) {
     return Number.isFinite(number) ? number : NaN;
 }
 
+function hasValidMoneyPrecision(input) {
+    const rawValue = String(input.value || "").trim().replace(",", ".");
+    return !rawValue || /^\d+(?:\.\d{1,2})?$/.test(rawValue);
+}
+
 function clearFieldError(input) {
     input.setCustomValidity("");
     input.removeAttribute("aria-invalid");
@@ -438,11 +577,15 @@ function markFieldInvalid(input, message) {
 function updateBudgetRemaining() {
     const budget = parseFormNumber(budgetInput);
     const deposit = parseFormNumber(depositInput);
+    const pricingType = pricingTypeInputs.find(input => input.checked)?.value || "unknown";
     clearFieldError(depositInput);
     depositError.textContent = "";
     budgetRemaining.hidden = true;
 
-    if (budget === null || deposit === null || !Number.isFinite(budget) || !Number.isFinite(deposit)) return;
+    if (
+        !["fixed", "fixed_plus_per_person"].includes(pricingType) ||
+        budget === null || deposit === null || !Number.isFinite(budget) || !Number.isFinite(deposit)
+    ) return;
 
     if (deposit > budget) {
         const message = "A entrada não pode ser maior que o orçamento total.";
@@ -456,21 +599,189 @@ function updateBudgetRemaining() {
     budgetRemaining.hidden = false;
 }
 
+function setFinancialFieldVisibility(selector, visible, controls = []) {
+    const wrapper = document.querySelector(selector);
+    if (wrapper) wrapper.hidden = !visible;
+    controls.forEach(control => {
+        if (control) control.disabled = !visible;
+    });
+}
+
+function getFinancialDraftStatus() {
+    const pricingType = pricingTypeInputs.find(input => input.checked)?.value || "unknown";
+    const childPricingType = childPricingInput.value || "unknown";
+    const missing = [];
+
+    if (pricingType === "fixed" && !budgetInput.value) missing.push("valor do pacote");
+    if (pricingType === "per_person" && !pricePerAdultInput.value) missing.push("valor por adulto");
+    if (pricingType === "fixed_plus_per_person") {
+        if (!budgetInput.value) missing.push("valor base");
+        if (!pricePerAdultInput.value) missing.push("valor por adulto");
+    }
+    if (childPricingType === "custom" && !pricePerChildInput.value) missing.push("valor por criança");
+    if (["free", "custom"].includes(childPricingType) && !childAgeLimitInput.value) {
+        missing.push("idade-limite das crianças");
+    }
+    if (includedGuestsToggle.checked && !includedGuestsInput.value) {
+        missing.push("quantidade de convidados inclusos");
+    }
+
+    if (!missing.length) {
+        return pricingType === "unknown"
+            ? "Os valores são opcionais e podem ser preenchidos quando vocês souberem."
+            : "Configuração financeira pronta para salvar.";
+    }
+    return `Rascunho financeiro: falta informar ${missing.join(", ")}. Você ainda pode salvar o local.`;
+}
+
+function updateFinancialFields() {
+    const pricingType = pricingTypeInputs.find(input => input.checked)?.value || "unknown";
+    const childPricingType = childPricingInput.value || "unknown";
+    const hasIncludedGuests = includedGuestsToggle.checked;
+
+    setFinancialFieldVisibility(
+        "#venue-budget-field",
+        ["fixed", "fixed_plus_per_person"].includes(pricingType),
+        [budgetInput]
+    );
+    setFinancialFieldVisibility(
+        "#venue-price-adult-field",
+        ["per_person", "fixed_plus_per_person"].includes(pricingType),
+        [pricePerAdultInput]
+    );
+    setFinancialFieldVisibility(
+        "#venue-price-child-field",
+        childPricingType === "custom",
+        [pricePerChildInput]
+    );
+    setFinancialFieldVisibility(
+        "#venue-child-age-field",
+        ["free", "custom"].includes(childPricingType),
+        [childAgeLimitInput]
+    );
+    setFinancialFieldVisibility(
+        "#venue-included-fields",
+        hasIncludedGuests,
+        [includedGuestsInput, extraGuestPriceInput]
+    );
+    includedGuestsToggle.setAttribute("aria-expanded", String(hasIncludedGuests));
+    financialStatus.textContent = getFinancialDraftStatus();
+    financialStatus.classList.toggle("incomplete", financialStatus.textContent.startsWith("Rascunho"));
+    updateBudgetRemaining();
+}
+
+function validateMoneyField(input, label) {
+    const value = parseFormNumber(input);
+    if (Number.isNaN(value) || (value !== null && value < 0) || !hasValidMoneyPrecision(input)) {
+        return markFieldInvalid(input, `${label} deve ser igual ou maior que zero e ter no máximo duas casas decimais.`);
+    }
+    return value;
+}
+
+function readPreservedMoney(input) {
+    const value = parseFormNumber(input);
+    return Number.isNaN(value) || (value !== null && value < 0) || !hasValidMoneyPrecision(input)
+        ? null
+        : value;
+}
+
+function validateFinancialFields(data) {
+    const pricingTypeValue = data.get("pricingType") || pricingTypeInputs.find(input => input.checked)?.value;
+    const pricingType = Object.hasOwn(PRICING_TYPE_LABELS, pricingTypeValue) ? pricingTypeValue : "unknown";
+    const childPricingValue = childPricingInput.value || data.get("childPricingType");
+    const childPricingType = Object.hasOwn(CHILD_PRICING_LABELS, childPricingValue)
+        ? childPricingValue
+        : "unknown";
+    const budgetValue = ["fixed", "fixed_plus_per_person"].includes(pricingType)
+        ? validateMoneyField(budgetInput, "O valor do pacote/base")
+        : readPreservedMoney(budgetInput);
+    if (budgetValue === false) return false;
+    const depositValue = validateMoneyField(depositInput, "O valor da entrada");
+    if (depositValue === false) return false;
+    const pricePerAdult = ["per_person", "fixed_plus_per_person"].includes(pricingType)
+        ? validateMoneyField(pricePerAdultInput, "O valor por adulto")
+        : readPreservedMoney(pricePerAdultInput);
+    if (pricePerAdult === false) return false;
+    let pricePerChild = childPricingType === "custom"
+        ? validateMoneyField(pricePerChildInput, "O valor por criança")
+        : null;
+    if (pricePerChild === false) return false;
+    let extraGuestPrice = includedGuestsToggle.checked
+        ? validateMoneyField(extraGuestPriceInput, "O valor por convidado excedente")
+        : null;
+    if (extraGuestPrice === false) return false;
+    let childAgeLimit = ["free", "custom"].includes(childPricingType)
+        ? parseFormNumber(childAgeLimitInput)
+        : null;
+    let includedGuests = includedGuestsToggle.checked ? parseFormNumber(includedGuestsInput) : null;
+
+    if (
+        ["free", "custom"].includes(childPricingType) && (Number.isNaN(childAgeLimit) ||
+        (childAgeLimit !== null && (!Number.isInteger(childAgeLimit) || childAgeLimit < 0 || childAgeLimit > 17))
+        )
+    ) {
+        return markFieldInvalid(childAgeLimitInput, "A idade-limite deve ser um número inteiro entre 0 e 17.");
+    }
+    if (
+        includedGuestsToggle.checked &&
+        (Number.isNaN(includedGuests) || includedGuests === null || !Number.isInteger(includedGuests) || includedGuests < 0)
+    ) {
+        return markFieldInvalid(includedGuestsInput, "Informe uma quantidade inteira de convidados inclusos, igual ou maior que zero.");
+    }
+    if (["fixed", "fixed_plus_per_person"].includes(pricingType) && budgetValue !== null && depositValue !== null && depositValue > budgetValue) {
+        return markFieldInvalid(depositInput, "A entrada não pode ser maior que o valor do pacote/base.");
+    }
+
+    if (childPricingType === "same_as_adult" || childPricingType === "unknown") {
+        pricePerChild = null;
+        childAgeLimit = null;
+    } else if (childPricingType === "free") {
+        pricePerChild = null;
+    }
+    if (!includedGuestsToggle.checked) {
+        includedGuests = null;
+        extraGuestPrice = null;
+    }
+
+    return {
+        pricingType,
+        budgetValue,
+        depositValue,
+        pricePerAdult,
+        childPricingType,
+        pricePerChild,
+        childAgeLimit,
+        includedGuests,
+        extraGuestPrice
+    };
+}
+
 function validateMainFields(data) {
     const name = String(data.get("name") || "").trim();
     const type = String(data.get("type") || "").trim();
     const address = String(data.get("address") || "").trim();
+    const customType = type === "Outro" ? String(data.get("customType") || "").trim() : null;
 
     if (!name) return markFieldInvalid(document.querySelector("#venue-name"), "Informe o nome do local.");
     if (!type) return markFieldInvalid(document.querySelector("#venue-type"), "Selecione o tipo do local.");
+    if (type === "Outro" && !customType) {
+        return markFieldInvalid(venueCustomTypeInput, "Informe qual é o tipo do local.");
+    }
     if (!address) return markFieldInvalid(document.querySelector("#venue-address"), "Informe o endereço do local.");
 
-    return { name, type, address };
+    return { name, type, customType, address };
+}
+
+function updateCustomTypeField({ focus = false } = {}) {
+    const isCustomType = venueTypeInput.value === "Outro";
+    venueCustomTypeField.hidden = !isCustomType;
+    venueCustomTypeInput.disabled = !isCustomType;
+    venueTypeInput.setAttribute("aria-expanded", String(isCustomType));
+    if (!isCustomType) clearFieldError(venueCustomTypeInput);
+    if (isCustomType && focus) venueCustomTypeInput.focus();
 }
 
 function validateDetailedFields(data) {
-    const budgetValue = parseFormNumber(budgetInput);
-    const depositValue = parseFormNumber(depositInput);
     const capacityInput = document.querySelector("#venue-capacity");
     const capacity = parseFormNumber(capacityInput);
     const ratingValue = data.get("rating");
@@ -479,15 +790,6 @@ function validateDetailedFields(data) {
     const endTime = String(data.get("endTime") || "");
     const endTimeInput = document.querySelector("#venue-end-time");
 
-    if (Number.isNaN(budgetValue) || (budgetValue !== null && budgetValue < 0)) {
-        return markFieldInvalid(budgetInput, "Informe um orçamento igual ou maior que zero.");
-    }
-    if (Number.isNaN(depositValue) || (depositValue !== null && depositValue < 0)) {
-        return markFieldInvalid(depositInput, "Informe uma entrada igual ou maior que zero.");
-    }
-    if (budgetValue !== null && depositValue !== null && depositValue > budgetValue) {
-        return markFieldInvalid(depositInput, "A entrada não pode ser maior que o orçamento total.");
-    }
     if (Number.isNaN(capacity) || (capacity !== null && (!Number.isInteger(capacity) || capacity < 0))) {
         return markFieldInvalid(capacityInput, "Informe a capacidade com um número inteiro igual ou maior que zero.");
     }
@@ -501,8 +803,6 @@ function validateDetailedFields(data) {
     return {
         description: String(data.get("description") || "").trim(),
         rating,
-        budgetValue,
-        depositValue,
         decorationOption: Object.hasOwn(DECORATION_LABELS, data.get("decorationOption"))
             ? data.get("decorationOption")
             : "unknown",
@@ -545,7 +845,12 @@ function resetVenueForm() {
     renderStructuredList("cons");
     setRating(null);
     setDetailsExpanded(false);
-    updateBudgetRemaining();
+    const unknownPricingInput = pricingTypeInputs.find(input => input.value === "unknown");
+    if (unknownPricingInput) unknownPricingInput.checked = true;
+    childPricingInput.value = "unknown";
+    includedGuestsToggle.checked = false;
+    updateCustomTypeField();
+    updateFinancialFields();
     updateVenueFormMode();
 }
 
@@ -553,10 +858,22 @@ function fillVenueForm(venue) {
     const item = normalizeVenue(venue);
     document.querySelector("#venue-name").value = item.name;
     document.querySelector("#venue-type").value = item.type;
+    venueCustomTypeInput.value = item.customType || "";
+    updateCustomTypeField();
     document.querySelector("#venue-address").value = item.address;
     document.querySelector("#venue-description").value = item.description;
+    pricingTypeInputs.forEach(input => {
+        input.checked = input.value === item.pricingType;
+    });
     budgetInput.value = hasValue(item.budgetValue) ? item.budgetValue : "";
     depositInput.value = hasValue(item.depositValue) ? item.depositValue : "";
+    pricePerAdultInput.value = hasValue(item.pricePerAdult) ? item.pricePerAdult : "";
+    childPricingInput.value = item.childPricingType;
+    pricePerChildInput.value = hasValue(item.pricePerChild) ? item.pricePerChild : "";
+    childAgeLimitInput.value = hasValue(item.childAgeLimit) ? item.childAgeLimit : "";
+    includedGuestsToggle.checked = hasValue(item.includedGuests);
+    includedGuestsInput.value = hasValue(item.includedGuests) ? item.includedGuests : "";
+    extraGuestPriceInput.value = hasValue(item.extraGuestPrice) ? item.extraGuestPrice : "";
     document.querySelector("#venue-decoration").value = item.decorationOption;
     document.querySelector("#venue-bridal-room").checked = item.hasBridalRoom;
     document.querySelector("#venue-capacity").value = hasValue(item.capacity) ? item.capacity : "";
@@ -572,7 +889,7 @@ function fillVenueForm(venue) {
     renderStructuredList("pros");
     renderStructuredList("cons");
     setRating(item.rating);
-    updateBudgetRemaining();
+    updateFinancialFields();
     setDetailsExpanded(hasDetailedInfo(item));
 }
 
@@ -669,7 +986,7 @@ function renderVenueDetails(venue) {
         : item.endTime;
 
     document.querySelector("#venue-details-title").textContent = item.name;
-    document.querySelector("#venue-details-subtitle").textContent = item.type;
+    document.querySelector("#venue-details-subtitle").textContent = getVenueDisplayType(item);
     content.replaceChildren();
 
     appendDetailSection("Avaliação do casal", [
@@ -677,12 +994,17 @@ function renderVenueDetails(venue) {
         ...(item.rating ? [{ label: "Avaliação", value: `${"★".repeat(item.rating)} ${item.rating} de 5` }] : [])
     ]);
 
-    appendDetailSection("Orçamento", [
-        ...(hasValue(item.budgetValue) ? [{ label: "Orçamento total", value: formatCurrency(item.budgetValue) }] : []),
+    appendDetailSection("Valores e cobrança", [
+        ...(item.pricingType !== "unknown" ? [{ label: "Forma de cobrança", value: formatVenuePricingType(item.pricingType), full: true }] : []),
+        ...(hasValue(item.budgetValue) ? [{ label: "Valor do pacote/base", value: formatCurrency(item.budgetValue) }] : []),
+        ...(hasValue(item.pricePerAdult) ? [{ label: "Valor por adulto", value: formatCurrency(item.pricePerAdult) }] : []),
         ...(hasValue(item.depositValue) ? [{ label: "Entrada", value: formatCurrency(item.depositValue) }] : []),
-        ...(hasValue(item.budgetValue) && hasValue(item.depositValue) && item.depositValue <= item.budgetValue
+        ...(["fixed", "fixed_plus_per_person"].includes(item.pricingType) && hasValue(item.budgetValue) && hasValue(item.depositValue) && item.depositValue <= item.budgetValue
             ? [{ label: "Valor restante", value: formatCurrency(item.budgetValue - item.depositValue) }]
-            : [])
+            : []),
+        ...(item.childPricingType !== "unknown" ? [{ label: "Cobrança infantil", value: formatChildPricingRule(item), full: true }] : []),
+        ...(hasValue(item.includedGuests) ? [{ label: "Convidados inclusos", value: numberFormatter.format(item.includedGuests) }] : []),
+        ...(hasValue(item.extraGuestPrice) ? [{ label: "Convidado excedente", value: formatCurrency(item.extraGuestPrice) }] : [])
     ]);
 
     appendDetailSection("Estrutura", [
@@ -1012,6 +1334,9 @@ venueDetailsToggle.addEventListener("click", () => {
     setDetailsExpanded(venueDetailsToggle.getAttribute("aria-expanded") !== "true");
 });
 
+venueTypeInput.addEventListener("change", () => updateCustomTypeField({ focus: venueTypeInput.value === "Outro" }));
+venueSearchInput.addEventListener("input", renderVenues);
+
 ratingInputs.forEach(input => input.addEventListener("change", () => setRating(Number(input.value))));
 ratingLabels.forEach(label => {
     label.addEventListener("mouseenter", () => updateRatingVisual(label.dataset.ratingValue));
@@ -1022,16 +1347,26 @@ clearRatingButton.addEventListener("click", () => {
     ratingInputs[0].focus();
 });
 
-[budgetInput, depositInput].forEach(input => input.addEventListener("input", () => {
+[budgetInput, depositInput, pricePerAdultInput, pricePerChildInput, childAgeLimitInput, includedGuestsInput, extraGuestPriceInput]
+    .forEach(input => input.addEventListener("input", () => {
     clearFieldError(input);
-    updateBudgetRemaining();
+    updateFinancialFields();
 }));
+
+pricingTypeInputs.forEach(input => input.addEventListener("change", updateFinancialFields));
+childPricingInput.addEventListener("change", updateFinancialFields);
+includedGuestsToggle.addEventListener("change", updateFinancialFields);
 
 venueForm.addEventListener("input", event => {
     if (
         event.target.matches("input, select, textarea") &&
         event.target !== budgetInput &&
-        event.target !== depositInput
+        event.target !== depositInput &&
+        event.target !== pricePerAdultInput &&
+        event.target !== pricePerChildInput &&
+        event.target !== childAgeLimitInput &&
+        event.target !== includedGuestsInput &&
+        event.target !== extraGuestPriceInput
     ) {
         clearFieldError(event.target);
     }
@@ -1062,7 +1397,8 @@ venueForm.addEventListener("submit", async event => {
     const mainFields = validateMainFields(data);
     if (!mainFields) return;
 
-    updateBudgetRemaining();
+    const financialFields = validateFinancialFields(data);
+    if (!financialFields) return;
     const detailedFields = validateDetailedFields(data);
     if (!detailedFields) return;
 
@@ -1078,6 +1414,7 @@ venueForm.addEventListener("submit", async event => {
     }
 
     const structuredDetails = {
+        ...financialFields,
         ...detailedFields,
         pros: cloneStructuredList(temporaryPros),
         cons: cloneStructuredList(temporaryCons)
