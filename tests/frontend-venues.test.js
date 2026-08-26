@@ -151,7 +151,10 @@ function createHarness(initialVenues = [], options = {}) {
     const formCard = create("#venue-form-card");
     const venueName = create("#venue-name");
     const venueType = create("#venue-type", { value: "Espaço para festa" });
+    const venueCustomTypeField = create("#venue-custom-type-field");
+    const venueCustomType = create("#venue-custom-type");
     const venueAddress = create("#venue-address");
+    const venueSearch = create("#venue-search");
     const venueDescription = create("#venue-description");
     formCard._queries.set("input", venueName);
 
@@ -165,6 +168,19 @@ function createHarness(initialVenues = [], options = {}) {
     const ratingStatus = create("#venue-rating-status");
     const budget = create("#venue-budget");
     const deposit = create("#venue-deposit");
+    const budgetField = create("#venue-budget-field");
+    const priceAdultField = create("#venue-price-adult-field");
+    const priceAdult = create("#venue-price-adult");
+    const childPricing = create("#venue-child-pricing", { value: "unknown" });
+    const priceChildField = create("#venue-price-child-field");
+    const priceChild = create("#venue-price-child");
+    const childAgeField = create("#venue-child-age-field");
+    const childAgeLimit = create("#venue-child-age-limit");
+    const includedToggle = create("#venue-included-toggle");
+    const includedFields = create("#venue-included-fields");
+    const includedGuests = create("#venue-included-guests");
+    const extraGuestPrice = create("#venue-extra-guest-price");
+    const financialStatus = create("#venue-financial-status");
     const depositError = create("#venue-deposit-error");
     const remaining = create("#venue-budget-remaining");
     const remainingValue = new FakeElement();
@@ -208,15 +224,21 @@ function createHarness(initialVenues = [], options = {}) {
     const ratingInputs = Array.from({ length: 5 }, (_, index) =>
         new FakeElement({ value: String(index + 1) })
     );
+    const pricingInputs = ["fixed", "per_person", "fixed_plus_per_person", "unknown"].map(value =>
+        new FakeElement({ value })
+    );
+    pricingInputs.at(-1).checked = true;
     const ratingLabels = Array.from({ length: 5 }, (_, index) =>
         new FakeElement({ dataset: { ratingValue: String(index + 1) } })
     );
 
     const formControls = [
-        venueName, venueType, venueAddress, venueDescription, budget, deposit,
+        venueName, venueType, venueCustomType, venueAddress, venueDescription, budget, deposit,
+        priceAdult, childPricing, priceChild, childAgeLimit, includedToggle,
+        includedGuests, extraGuestPrice,
         decoration, bridalRoom, capacity, parking, spaceAvailability, startTime,
         endTime, availableDate, proTitle, proDescription, conTitle, conDescription,
-        ...ratingInputs
+        ...ratingInputs, ...pricingInputs
     ];
     form._onReset = () => {
         formControls.forEach(control => {
@@ -225,7 +247,12 @@ function createHarness(initialVenues = [], options = {}) {
         });
         venueType.value = "Espaço para festa";
         decoration.value = "unknown";
+        childPricing.value = "unknown";
         spaceAvailability.value = "unknown";
+        ["fixed", "per_person", "fixed_plus_per_person", "unknown"].forEach((value, index) => {
+            pricingInputs[index].value = value;
+            pricingInputs[index].checked = value === "unknown";
+        });
     };
     form._queryAll = selector => selector === "[aria-invalid='true']"
         ? formControls.filter(control => control.getAttribute("aria-invalid") === "true")
@@ -239,6 +266,7 @@ function createHarness(initialVenues = [], options = {}) {
         },
         querySelectorAll(selector) {
             if (selector === "input[name='rating']") return ratingInputs;
+            if (selector === "input[name='pricingType']") return pricingInputs;
             if (selector === "[data-rating-value]") return ratingLabels;
             if (selector === "[data-toggle-form]") return [];
             return [];
@@ -378,14 +406,27 @@ function createHarness(initialVenues = [], options = {}) {
         elements,
         form,
         formCard,
+        venueType,
+        venueCustomTypeField,
+        venueCustomType,
+        venueSearch,
         detailsFields,
         detailsDialog,
         deleteDialog,
         ratingInputs,
+        pricingInputs,
         remaining,
         remainingValue,
         deposit,
         budget,
+        priceAdult,
+        childPricing,
+        priceChild,
+        childAgeLimit,
+        includedToggle,
+        includedGuests,
+        extraGuestPrice,
+        financialStatus,
         capacity,
         endTime,
         venueList,
@@ -427,7 +468,10 @@ function baseFormValues(overrides = {}) {
     return {
         name: "Villa Jardim",
         type: "Espaço para festa",
+        customType: "",
         address: "Rua das Flores, 100",
+        pricingType: "unknown",
+        childPricingType: "unknown",
         description: "",
         decorationOption: "unknown",
         spaceAvailability: "unknown",
@@ -778,6 +822,8 @@ test("favorito e Google Maps continuam funcionando", async () => {
 
 test("mantém validações financeiras, capacidade e horários", () => {
     const harness = createHarness();
+    harness.pricingInputs[0].checked = true;
+    harness.pricingInputs[3].checked = false;
     harness.budget.value = "10000";
     harness.deposit.value = "2500.50";
     vm.runInContext("updateBudgetRemaining()", harness.context);
@@ -800,6 +846,186 @@ test("mantém validações financeiras, capacidade e horários", () => {
         vm.runInContext("validateDetailedFields(new FormData(venueForm)).endTime", harness.context),
         "02:00"
     );
+});
+
+test("normaliza o modelo financeiro e mantém compatibilidade com locais legados", () => {
+    const harness = createHarness();
+    const empty = readValue(harness, "normalizeVenue({})");
+    assert.equal(empty.pricingType, "unknown");
+    assert.equal(empty.childPricingType, "unknown");
+    assert.equal(empty.pricePerAdult, null);
+    assert.equal(empty.includedGuests, null);
+
+    const legacy = readValue(harness, "normalizeVenue({ budgetValue: 8500 })");
+    assert.equal(legacy.pricingType, "fixed");
+    assert.equal(readValue(harness, "normalizeVenue({ pricingType: 'invalid', budgetValue: 8500 }).pricingType"), "unknown");
+    assert.deepEqual(
+        readValue(harness, "getVenuePricingSummary({ budgetValue: 8500 })"),
+        ["R$ 8.500,00 pacote"]
+    );
+
+    const cleanedChildRule = readValue(harness, `normalizeVenue({
+        childPricingType: 'same_as_adult', pricePerChild: 40, childAgeLimit: 10
+    })`);
+    assert.equal(cleanedChildRule.pricePerChild, null);
+    assert.equal(cleanedChildRule.childAgeLimit, null);
+});
+
+test("normaliza tipo personalizado e mantém registro antigo com Outro válido", () => {
+    const harness = createHarness();
+    const legacy = readValue(harness, "normalizeVenue({ type: 'Outro' })");
+    assert.equal(legacy.type, "Outro");
+    assert.equal(legacy.customType, null);
+    assert.equal(vm.runInContext("getVenueDisplayType({ type: 'Outro' })", harness.context), "Outro");
+
+    for (const customType of ["Praia", "Campo", "Montanha"]) {
+        const normalized = readValue(harness, `normalizeVenue({ type: 'Outro', customType: '  ${customType}  ' })`);
+        assert.equal(normalized.customType, customType);
+        assert.equal(vm.runInContext(`getVenueDisplayType({ type: 'Outro', customType: '${customType}' })`, harness.context), customType);
+    }
+    assert.equal(readValue(harness, "normalizeVenue({ type: 'Buffet', customType: 'Praia' }).customType"), null);
+});
+
+test("Outro exige tipo personalizado com texto útil", () => {
+    const harness = createHarness();
+    harness.venueType.value = "Outro";
+    vm.runInContext("updateCustomTypeField()", harness.context);
+    assert.equal(harness.venueCustomTypeField.hidden, false);
+    assert.equal(harness.venueCustomType.disabled, false);
+
+    harness.setFormValues(baseFormValues({ type: "Outro", customType: "   " }));
+    assert.equal(vm.runInContext("validateMainFields(new FormData(venueForm))", harness.context), false);
+    assert.match(harness.venueCustomType.customValidity, /Informe qual é o tipo/);
+    assert.equal(harness.venueCustomType.focused, true);
+});
+
+test("cadastra e edita Outro preservando customType normalizado", async () => {
+    const harness = createHarness();
+    harness.venueType.value = "Outro";
+    harness.venueCustomType.value = "Praia";
+    vm.runInContext("updateCustomTypeField()", harness.context);
+    harness.setFormValues(baseFormValues({ type: "Outro", customType: "  Praia  " }));
+    await submitVenue(harness);
+
+    let saved = readValue(harness, "state.venues[0]");
+    assert.equal(saved.type, "Outro");
+    assert.equal(saved.customType, "Praia");
+    assert.equal(harness.remoteCalls.create[0].customType, "Praia");
+
+    vm.runInContext(`startVenueEdit('${saved.id}')`, harness.context);
+    assert.equal(harness.venueType.value, "Outro");
+    assert.equal(harness.venueCustomTypeField.hidden, false);
+    assert.equal(harness.venueCustomType.value, "Praia");
+
+    harness.setFormValues(baseFormValues({ type: "Outro", customType: "Campo" }));
+    await submitVenue(harness);
+    saved = readValue(harness, "state.venues[0]");
+    assert.equal(saved.customType, "Campo");
+    assert.equal(harness.remoteCalls.update[0].venue.customType, "Campo");
+});
+
+test("trocar Outro por Buffet oculta e salva customType como null", async () => {
+    const harness = createHarness([{
+        id: "custom-venue", name: "Pé na areia", type: "Outro", customType: "Praia", address: "Orla"
+    }]);
+    vm.runInContext("startVenueEdit('custom-venue')", harness.context);
+    harness.venueType.value = "Buffet";
+    vm.runInContext("updateCustomTypeField()", harness.context);
+    assert.equal(harness.venueCustomTypeField.hidden, true);
+    assert.equal(harness.venueCustomType.disabled, true);
+
+    harness.setFormValues(baseFormValues({ name: "Pé na areia", type: "Buffet", customType: "Praia", address: "Orla" }));
+    await submitVenue(harness);
+    assert.equal(readValue(harness, "state.venues[0].customType"), null);
+    assert.equal(harness.remoteCalls.update[0].venue.customType, null);
+});
+
+test("card, modal e busca usam o tipo personalizado", () => {
+    const harness = createHarness([{
+        id: "mountain", name: "Refúgio", type: "Outro", customType: "Montanha",
+        address: "Serra", description: "Vista ampla"
+    }, {
+        id: "buffet", name: "Salão", type: "Buffet", address: "Centro"
+    }]);
+
+    assert.match(harness.venueList.innerHTML, /<span class="venue-type">Montanha<\/span>/);
+    assert.doesNotMatch(harness.venueList.innerHTML, /<span class="venue-type">Outro<\/span>/);
+
+    vm.runInContext("openVenueDetails('mountain')", harness.context);
+    assert.equal(harness.elements.get("#venue-details-subtitle").textContent, "Montanha");
+
+    harness.venueSearch.value = "montanha";
+    vm.runInContext("renderVenues()", harness.context);
+    assert.match(harness.venueList.innerHTML, /Refúgio/);
+    assert.doesNotMatch(harness.venueList.innerHTML, /Salão/);
+});
+
+test("alternância financeira preserva valores ocultos durante a edição", () => {
+    const harness = createHarness();
+    harness.priceAdult.value = "175.50";
+    harness.pricingInputs[1].checked = true;
+    harness.pricingInputs[3].checked = false;
+    vm.runInContext("updateFinancialFields()", harness.context);
+    assert.equal(harness.priceAdult.disabled, false);
+
+    harness.pricingInputs[1].checked = false;
+    harness.pricingInputs[0].checked = true;
+    vm.runInContext("updateFinancialFields()", harness.context);
+    assert.equal(harness.priceAdult.disabled, true);
+    assert.equal(harness.priceAdult.value, "175.50");
+});
+
+test("salva configuração financeira completa e limpa regras infantis incompatíveis", async () => {
+    const harness = createHarness();
+    harness.pricingInputs[2].checked = true;
+    harness.pricingInputs[3].checked = false;
+    harness.budget.value = "10000.00";
+    harness.deposit.value = "2000.00";
+    harness.priceAdult.value = "180.50";
+    harness.childPricing.value = "custom";
+    harness.priceChild.value = "90.25";
+    harness.childAgeLimit.value = "12";
+    harness.includedToggle.checked = true;
+    harness.includedGuests.value = "100";
+    harness.extraGuestPrice.value = "210.00";
+    harness.setFormValues(baseFormValues({
+        pricingType: "fixed_plus_per_person",
+        childPricingType: "custom"
+    }));
+
+    await submitVenue(harness);
+    const saved = readValue(harness, "state.venues[0]");
+    assert.equal(saved.pricingType, "fixed_plus_per_person");
+    assert.equal(saved.pricePerAdult, 180.5);
+    assert.equal(saved.pricePerChild, 90.25);
+    assert.equal(saved.childAgeLimit, 12);
+    assert.equal(saved.includedGuests, 100);
+    assert.equal(saved.extraGuestPrice, 210);
+    assert.match(harness.venueList.innerHTML, /por adulto/);
+
+    const cleaningHarness = createHarness();
+    cleaningHarness.priceChild.value = "-90";
+    cleaningHarness.childAgeLimit.value = "99";
+    cleaningHarness.childPricing.value = "same_as_adult";
+    cleaningHarness.setFormValues(baseFormValues({ childPricingType: "same_as_adult" }));
+    const cleaned = readValue(cleaningHarness, "validateFinancialFields(new FormData(venueForm))");
+    assert.equal(cleaned.pricePerChild, null);
+    assert.equal(cleaned.childAgeLimit, null);
+});
+
+test("bloqueia dinheiro com mais de duas casas e limites inteiros inválidos", () => {
+    const harness = createHarness();
+    harness.priceAdult.value = "12.345";
+    harness.setFormValues(baseFormValues({ pricingType: "per_person" }));
+    assert.equal(vm.runInContext("validateFinancialFields(new FormData(venueForm))", harness.context), false);
+    assert.match(harness.priceAdult.customValidity, /duas casas decimais/);
+
+    harness.priceAdult.value = "12.34";
+    harness.childPricing.value = "free";
+    harness.childAgeLimit.value = "18";
+    harness.setFormValues(baseFormValues({ pricingType: "per_person", childPricingType: "free" }));
+    assert.equal(vm.runInContext("validateFinancialFields(new FormData(venueForm))", harness.context), false);
+    assert.match(harness.childAgeLimit.customValidity, /entre 0 e 17/);
 });
 
 test("carrega locais remotos, incluindo estado vazio, sem usar o estado local", async () => {
@@ -1114,16 +1340,27 @@ test("HTML e CSS mantêm acessibilidade, modais e responsividade", () => {
     assert.match(venueHtml, /id="venue-pro-title"/);
     assert.match(venueHtml, /id="venue-con-description"/);
     assert.match(venueHtml, /id="cancel-venue-edit"/);
+    assert.match(venueHtml, /<legend>Valores e cobrança<\/legend>/);
+    assert.match(venueHtml, /name="pricingType"[^>]*value="fixed_plus_per_person"/);
+    assert.match(venueHtml, /id="venue-child-age-limit"[^>]*max="17"/);
+    assert.match(venueHtml, /id="venue-included-toggle"[^>]*aria-controls="venue-included-fields"/);
+    assert.match(venueHtml, /id="venue-type"[^>]*aria-controls="venue-custom-type-field"/);
+    assert.match(venueHtml, /<label for="venue-custom-type">Qual tipo de local\?<\/label>/);
+    assert.match(venueHtml, /id="venue-custom-type"[^>]*placeholder="Ex\.: Campo, praia, sítio, montanha/);
+    assert.match(venueHtml, /<label class="visually-hidden" for="venue-search">Buscar locais<\/label>/);
     assert.match(venueHtml, /<dialog class="venue-delete-dialog"/);
     assert.doesNotMatch(venueSource, /window\.confirm/);
     assert.match(venueCss, /\.pros-cons-editors \{[^}]*grid-template-columns: repeat\(2/);
     assert.match(venueCss, /\.button-danger/);
     assert.match(venueCss, /@media \(max-width: 620px\)/);
+    assert.match(venueCss, /\.pricing-options \{[^}]*grid-template-columns: repeat\(4/);
+    assert.match(venueCss, /\.venue-search, \.venue-toolbar-actions \.button \{ width: 100%; \}/);
+    assert.doesNotMatch(venueCss, /min-width:\s*(?:4[3-9]\d|[5-9]\d\d)px/);
     assert.match(venueCss, /\.pros-cons-editors, \.venue-pros-cons \{ grid-template-columns: 1fr; \}/);
     assert.match(venueCss, /\.venue-dialog-content \{[^}]*overflow-y: auto/);
     assert.doesNotMatch(venueSource, /saveState\s*\(/);
     assert.doesNotMatch(venueSource, /await\s+createCurrentWeddingVenue\s*\(/);
-    assert.match(venueHtml, /supabase\.js\?v=20260722-logout-1/);
+    assert.match(venueHtml, /supabase\.js\?v=20260825-venue-custom-type-1/);
     assert.match(venueHtml, /app\.js\?v=20260721-venues-2/);
-    assert.match(venueHtml, /main\.js\?v=20260721-venues-2/);
+    assert.match(venueHtml, /main\.js\?v=20260825-venue-custom-type-1/);
 });

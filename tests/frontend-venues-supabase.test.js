@@ -154,7 +154,10 @@ test("converte snake_case do banco para o modelo completo da interface", () => {
     const mapped = evaluate(context, `mapVenueDatabaseRecord({
         id: '11111111-1111-4111-8111-111111111111',
         name: 'Villa Jardim', type: 'Buffet', address: 'Rua 1', favorite: true,
-        description: null, rating: 5, budget_value: '12000.50', deposit_value: null,
+        description: null, rating: 5, pricing_type: 'fixed_plus_per_person',
+        budget_value: '12000.50', deposit_value: null, price_per_adult: '180.75',
+        child_pricing_type: 'custom', price_per_child: '90.25', child_age_limit: '12',
+        included_guests: '100', extra_guest_price: '210.50',
         decoration_option: null, has_bridal_room: null, capacity: '180',
         has_parking: true, space_availability: null,
         start_time: '19:00:00', end_time: '03:30:00', available_date: null,
@@ -166,12 +169,20 @@ test("converte snake_case do banco para o modelo completo da interface", () => {
         id: "11111111-1111-4111-8111-111111111111",
         name: "Villa Jardim",
         type: "Buffet",
+        customType: null,
         address: "Rua 1",
         favorite: true,
         description: "",
         rating: 5,
+        pricingType: "fixed_plus_per_person",
         budgetValue: 12000.5,
         depositValue: null,
+        pricePerAdult: 180.75,
+        childPricingType: "custom",
+        pricePerChild: 90.25,
+        childAgeLimit: 12,
+        includedGuests: 100,
+        extraGuestPrice: 210.5,
         decorationOption: "unknown",
         hasBridalRoom: false,
         capacity: 180,
@@ -191,7 +202,10 @@ test("converte camelCase para payload seguro sem campos técnicos", () => {
     const payload = evaluate(context, `mapVenueToDatabasePayload({
         id: 'id-local', weddingId: 'casamento-forjado', createdAt: 'ontem',
         name: '  Villa Jardim  ', type: ' Buffet ', address: ' Rua 1 ', favorite: false,
-        description: '  Amplo  ', rating: null, budgetValue: NaN, depositValue: '',
+        description: '  Amplo  ', rating: null, pricingType: 'per_person',
+        budgetValue: NaN, depositValue: '', pricePerAdult: '199.90',
+        childPricingType: 'same_as_adult', pricePerChild: 80, childAgeLimit: 10,
+        includedGuests: '', extraGuestPrice: 250,
         decorationOption: 'included', hasBridalRoom: true, capacity: null,
         hasParking: false, spaceAvailability: 'ceremony_and_reception',
         startTime: '', endTime: '', availableDate: '', remainingValue: 999,
@@ -201,12 +215,20 @@ test("converte camelCase para payload seguro sem campos técnicos", () => {
     assert.deepEqual(JSON.parse(JSON.stringify(payload)), {
         name: "Villa Jardim",
         type: "Buffet",
+        custom_type: null,
         address: "Rua 1",
         favorite: false,
         description: "Amplo",
         rating: null,
+        pricing_type: "per_person",
         budget_value: null,
         deposit_value: null,
+        price_per_adult: 199.9,
+        child_pricing_type: "same_as_adult",
+        price_per_child: null,
+        child_age_limit: null,
+        included_guests: null,
+        extra_guest_price: null,
         decoration_option: "included",
         has_bridal_room: true,
         capacity: null,
@@ -221,6 +243,34 @@ test("converte camelCase para payload seguro sem campos técnicos", () => {
     assert.equal(Object.hasOwn(payload, "id"), false);
     assert.equal(Object.hasOwn(payload, "wedding_id"), false);
     assert.equal(Object.hasOwn(payload, "remainingValue"), false);
+});
+
+test("infere cobrança fixa para registro legado com orçamento", () => {
+    const context = loadSupabaseFunctions(createVenueClient());
+    const mapped = evaluate(context, "mapVenueDatabaseRecord({ budget_value: '5000' })");
+    assert.equal(mapped.pricingType, "fixed");
+
+    const invalid = evaluate(context, `mapVenueToDatabasePayload({
+        pricingType: 'per_person', pricePerAdult: 12.345,
+        childPricingType: 'custom', pricePerChild: -1, childAgeLimit: 18
+    })`);
+    assert.equal(invalid.price_per_adult, null);
+    assert.equal(invalid.price_per_child, null);
+    assert.equal(invalid.child_age_limit, null);
+});
+
+test("mapeia tipo personalizado nos dois sentidos e limpa valor incompatível", () => {
+    const context = loadSupabaseFunctions(createVenueClient());
+    const mapped = evaluate(context, "mapVenueDatabaseRecord({ type: 'Outro', custom_type: '  Praia  ' })");
+    assert.equal(mapped.type, "Outro");
+    assert.equal(mapped.customType, "Praia");
+
+    const customPayload = evaluate(context, "mapVenueToDatabasePayload({ type: 'Outro', customType: '  Montanha  ' })");
+    assert.equal(customPayload.type, "Outro");
+    assert.equal(customPayload.custom_type, "Montanha");
+
+    const fixedPayload = evaluate(context, "mapVenueToDatabasePayload({ type: 'Buffet', customType: 'Praia' })");
+    assert.equal(fixedPayload.custom_type, null);
 });
 
 test("lista locais autenticados com filtro de casamento e ordenação", async () => {

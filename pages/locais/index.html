@@ -10,11 +10,11 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="../../assets/global.css">
     <link rel="stylesheet" href="../../components/sidebar.css?v=20260722-logout-1">
-    <link rel="stylesheet" href="style.css">
-    <script src="../../js/supabase.js?v=20260722-logout-1" defer></script>
+    <link rel="stylesheet" href="style.css?v=20260825-venue-custom-type-1">
+    <script src="../../js/supabase.js?v=20260825-venue-custom-type-1" defer></script>
     <script src="../../js/app.js?v=20260721-venues-2" defer></script>
     <script src="../../components/sidebar.js?v=20260722-logout-1" defer></script>
-    <script src="main.js?v=20260721-venues-2" defer></script>
+    <script src="main.js?v=20260825-venue-custom-type-1" defer></script>
 </head>
 <body data-page="locais">
     <div class="app-shell">
@@ -32,7 +32,11 @@
             <section class="page active" id="locais" aria-labelledby="page-title">
                 <div class="section-toolbar">
                     <div><p class="section-description">Compare os espaços que vocês estão pensando em fechar.</p></div>
-                    <button class="button button-primary" data-toggle-form="venue-form-card" type="button">+ Adicionar local</button>
+                    <div class="venue-toolbar-actions">
+                        <label class="visually-hidden" for="venue-search">Buscar locais</label>
+                        <input class="venue-search" id="venue-search" type="search" placeholder="Buscar por nome, tipo ou endereço" autocomplete="off">
+                        <button class="button button-primary" data-toggle-form="venue-form-card" type="button">+ Adicionar local</button>
+                    </div>
                 </div>
 
                 <article class="form-card hidden" id="venue-form-card">
@@ -50,22 +54,137 @@
                                 <label for="venue-name">Nome do local</label>
                                 <input id="venue-name" name="name" required placeholder="Ex.: Villa Jardim">
                             </div>
-                            <div class="field">
-                                <label for="venue-type">Tipo</label>
-                                <select id="venue-type" name="type" required>
-                                    <option>Espaço para festa</option>
-                                    <option>Igreja</option>
-                                    <option>Cartório</option>
-                                    <option>Buffet</option>
-                                    <option>Hospedagem</option>
-                                    <option>Outro</option>
-                                </select>
+                            <div class="venue-type-fields">
+                                <div class="field">
+                                    <label for="venue-type">Tipo</label>
+                                    <select id="venue-type" name="type" required aria-controls="venue-custom-type-field" aria-expanded="false">
+                                        <option>Espaço para festa</option>
+                                        <option>Igreja</option>
+                                        <option>Cartório</option>
+                                        <option>Buffet</option>
+                                        <option>Hospedagem</option>
+                                        <option>Outro</option>
+                                    </select>
+                                </div>
+                                <div class="field venue-custom-type-field" id="venue-custom-type-field" hidden>
+                                    <label for="venue-custom-type">Qual tipo de local?</label>
+                                    <input id="venue-custom-type" name="customType" placeholder="Ex.: Campo, praia, sítio, montanha..." autocomplete="off" disabled>
+                                </div>
                             </div>
                             <div class="field venue-address-field">
                                 <label for="venue-address">Endereço</label>
                                 <input id="venue-address" name="address" required placeholder="Rua, número, cidade">
                             </div>
                         </div>
+
+                        <fieldset class="venue-financial-section" aria-describedby="venue-financial-status">
+                            <legend>Valores e cobrança</legend>
+                            <p class="financial-intro">Registrem como o local cobra. Os valores são opcionais e podem ser completados depois.</p>
+
+                            <fieldset class="pricing-type-field">
+                                <legend>Forma de cobrança</legend>
+                                <div class="pricing-options">
+                                    <label class="pricing-choice" for="venue-pricing-fixed">
+                                        <input id="venue-pricing-fixed" name="pricingType" type="radio" value="fixed">
+                                        <span>Valor fixo</span>
+                                        <small>Pacote fechado</small>
+                                    </label>
+                                    <label class="pricing-choice" for="venue-pricing-person">
+                                        <input id="venue-pricing-person" name="pricingType" type="radio" value="per_person">
+                                        <span>Por pessoa</span>
+                                        <small>Preço por adulto</small>
+                                    </label>
+                                    <label class="pricing-choice" for="venue-pricing-mixed">
+                                        <input id="venue-pricing-mixed" name="pricingType" type="radio" value="fixed_plus_per_person">
+                                        <span>Fixo + pessoa</span>
+                                        <small>Base e adicional</small>
+                                    </label>
+                                    <label class="pricing-choice" for="venue-pricing-unknown">
+                                        <input id="venue-pricing-unknown" name="pricingType" type="radio" value="unknown" checked>
+                                        <span>A definir</span>
+                                        <small>Ainda não informado</small>
+                                    </label>
+                                </div>
+                            </fieldset>
+
+                            <div class="financial-fields-grid">
+                                <div class="field" id="venue-budget-field" hidden>
+                                    <label for="venue-budget">Valor do pacote/base</label>
+                                    <div class="currency-input">
+                                        <span aria-hidden="true">R$</span>
+                                        <input id="venue-budget" name="budgetValue" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00">
+                                    </div>
+                                </div>
+                                <div class="field" id="venue-price-adult-field" hidden>
+                                    <label for="venue-price-adult">Valor por adulto</label>
+                                    <div class="currency-input">
+                                        <span aria-hidden="true">R$</span>
+                                        <input id="venue-price-adult" name="pricePerAdult" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00">
+                                    </div>
+                                </div>
+                                <div class="field">
+                                    <label for="venue-deposit">Entrada solicitada</label>
+                                    <div class="currency-input">
+                                        <span aria-hidden="true">R$</span>
+                                        <input id="venue-deposit" name="depositValue" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00" aria-describedby="venue-deposit-error">
+                                    </div>
+                                    <p class="field-error-message" id="venue-deposit-error" aria-live="polite"></p>
+                                </div>
+                                <output class="budget-remaining financial-field-full" id="venue-budget-remaining" hidden>
+                                    <span>Valor restante do pacote/base</span>
+                                    <strong>R$ 0,00</strong>
+                                </output>
+                            </div>
+
+                            <div class="financial-subsection">
+                                <h3>Crianças</h3>
+                                <div class="financial-fields-grid">
+                                    <div class="field">
+                                        <label for="venue-child-pricing">Regra de cobrança infantil</label>
+                                        <select id="venue-child-pricing" name="childPricingType">
+                                            <option value="unknown">Ainda não informado</option>
+                                            <option value="free">Crianças não pagam</option>
+                                            <option value="same_as_adult">Mesmo valor do adulto</option>
+                                            <option value="custom">Valor infantil personalizado</option>
+                                        </select>
+                                    </div>
+                                    <div class="field" id="venue-price-child-field" hidden>
+                                        <label for="venue-price-child">Valor por criança</label>
+                                        <div class="currency-input">
+                                            <span aria-hidden="true">R$</span>
+                                            <input id="venue-price-child" name="pricePerChild" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00">
+                                        </div>
+                                    </div>
+                                    <div class="field" id="venue-child-age-field" hidden>
+                                        <label for="venue-child-age-limit">Idade-limite</label>
+                                        <input id="venue-child-age-limit" name="childAgeLimit" type="number" min="0" max="17" step="1" inputmode="numeric" placeholder="Ex.: 10">
+                                        <p class="field-help">Considere crianças até esta idade.</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="financial-subsection">
+                                <label class="checkbox-field package-toggle" for="venue-included-toggle">
+                                    <input id="venue-included-toggle" type="checkbox" aria-controls="venue-included-fields" aria-expanded="false">
+                                    <span>O pacote inclui uma quantidade de convidados</span>
+                                </label>
+                                <div class="financial-fields-grid included-fields" id="venue-included-fields" hidden>
+                                    <div class="field">
+                                        <label for="venue-included-guests">Convidados inclusos</label>
+                                        <input id="venue-included-guests" name="includedGuests" type="number" min="0" step="1" inputmode="numeric" placeholder="Ex.: 100">
+                                    </div>
+                                    <div class="field">
+                                        <label for="venue-extra-guest-price">Valor por convidado excedente</label>
+                                        <div class="currency-input">
+                                            <span aria-hidden="true">R$</span>
+                                            <input id="venue-extra-guest-price" name="extraGuestPrice" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <p class="financial-status" id="venue-financial-status" aria-live="polite">Os valores são opcionais e podem ser preenchidos quando vocês souberem.</p>
+                        </fieldset>
 
                         <button class="details-toggle" id="venue-details-toggle" type="button" aria-expanded="false" aria-controls="venue-details-fields">
                             <span class="details-toggle-label">Adicionar opções detalhadas</span>
@@ -137,31 +256,6 @@
                                             <div class="structured-list" id="venue-cons-list" aria-live="polite"></div>
                                         </section>
                                     </div>
-                                </div>
-                            </fieldset>
-
-                            <fieldset class="detail-section">
-                                <legend>Orçamento</legend>
-                                <div class="detail-fields-grid">
-                                    <div class="field">
-                                        <label for="venue-budget">Valor total do orçamento</label>
-                                        <div class="currency-input">
-                                            <span aria-hidden="true">R$</span>
-                                            <input id="venue-budget" name="budgetValue" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00">
-                                        </div>
-                                    </div>
-                                    <div class="field">
-                                        <label for="venue-deposit">Valor da entrada solicitada</label>
-                                        <div class="currency-input">
-                                            <span aria-hidden="true">R$</span>
-                                            <input id="venue-deposit" name="depositValue" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0,00" aria-describedby="venue-deposit-error">
-                                        </div>
-                                        <p class="field-error-message" id="venue-deposit-error" aria-live="polite"></p>
-                                    </div>
-                                    <output class="budget-remaining detail-field-full" id="venue-budget-remaining" hidden>
-                                        <span>Valor restante</span>
-                                        <strong>R$ 0,00</strong>
-                                    </output>
                                 </div>
                             </fieldset>
 

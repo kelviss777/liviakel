@@ -5,8 +5,35 @@
 .venue-edit-notice span { color: var(--gold); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .venue-edit-notice strong { color: var(--wine); font-size: 14px; }
 .venue-edit-notice p { max-width: 430px; margin: 0; color: #7e6339; font-size: 11px; line-height: 1.45; }
-.venue-primary-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, .55fr) minmax(0, 1.35fr); align-items: end; gap: 13px; }
+.venue-primary-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(190px, .55fr) minmax(0, 1.35fr); align-items: start; gap: 13px; }
 .venue-address-field { min-width: 0; }
+.venue-type-fields { display: grid; min-width: 0; gap: 12px; }
+.venue-custom-type-field[hidden] { display: none; }
+.venue-toolbar-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
+.venue-search { width: min(300px, 42vw); min-height: 39px; padding: 9px 11px; border: 1px solid #ded4d2; border-radius: 8px; background: white; color: var(--ink); font: inherit; }
+.venue-search:focus { outline: 0; border-color: var(--rose); box-shadow: 0 0 0 3px rgba(191,135,152,.13); }
+.venue-financial-section { min-width: 0; margin: 20px 0 0; padding: 20px; border: 1px solid rgba(184,135,73,.28); border-radius: 14px; background: linear-gradient(145deg, #fffdfb, #fbf5ea); }
+.venue-financial-section > legend { padding: 0 8px; color: var(--wine); font-family: "Playfair Display", serif; font-size: 20px; font-weight: 700; }
+.financial-intro { margin: -2px 0 16px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.pricing-type-field { min-width: 0; margin: 0 0 18px; padding: 0; border: 0; }
+.pricing-type-field > legend { margin-bottom: 9px; color: var(--wine); font-size: 11px; font-weight: 700; letter-spacing: .04em; }
+.pricing-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+.pricing-choice { position: relative; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: white; cursor: pointer; transition: border-color .2s, background .2s, box-shadow .2s; }
+.pricing-choice:has(input:checked) { border-color: var(--gold); background: #fbf1df; box-shadow: 0 0 0 2px rgba(184,135,73,.1); }
+.pricing-choice:has(input:focus-visible) { outline: 3px solid rgba(191,135,152,.25); outline-offset: 2px; }
+.pricing-choice input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.pricing-choice span, .pricing-choice small { display: block; overflow-wrap: anywhere; }
+.pricing-choice span { color: var(--wine); font-size: 12px; font-weight: 700; }
+.pricing-choice small { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.35; }
+.financial-fields-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 15px; }
+.financial-fields-grid > [hidden] { display: none; }
+.financial-field-full { grid-column: 1 / -1; }
+.financial-subsection { margin-top: 18px; padding-top: 17px; border-top: 1px solid rgba(116,75,97,.11); }
+.financial-subsection h3 { margin: 0 0 11px; color: var(--wine); font-family: "DM Sans", sans-serif; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; }
+.package-toggle { width: fit-content; font-weight: 600; }
+.included-fields { margin-top: 14px; }
+.financial-status { margin: 17px 0 0; padding: 10px 12px; border-radius: 8px; background: rgba(116,75,97,.07); color: var(--muted); font-size: 11px; line-height: 1.45; }
+.financial-status.incomplete { background: #fbecd3; color: #7e6339; }
 .venue-form-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 15px; }
 .details-toggle { display: flex; align-items: center; justify-content: space-between; gap: 14px; width: 100%; margin-top: 17px; padding: 12px 14px; border: 1px solid rgba(116,75,97,.16); border-radius: 9px; background: rgba(255,253,251,.62); color: var(--wine); font-size: 12px; font-weight: 700; cursor: pointer; transition: border-color .2s, background .2s; }
 .details-toggle:hover { border-color: var(--rose); background: var(--paper); }
@@ -88,6 +115,7 @@
 .venue-highlights { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
 .venue-highlight { padding: 5px 8px; border-radius: 20px; background: var(--rose-pale); color: var(--wine); font-size: 10px; font-weight: 700; white-space: nowrap; }
 .venue-highlight.rating { background: #f8ead0; color: #8a692e; }
+.venue-highlight.financial { background: #eee8dc; color: #6c5330; }
 .venue-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--line); }
 .venue-card-actions { display: flex; align-items: center; gap: 4px; }
 .venue-details-button, .venue-edit-button { padding: 7px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--wine); font-size: 10px; font-weight: 700; cursor: pointer; }
@@ -130,13 +158,19 @@
     .venue-primary-fields { grid-template-columns: 1fr 1fr; }
     .venue-address-field { grid-column: 1 / -1; }
     .venue-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .pricing-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .financial-fields-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 620px) {
-    .venue-primary-fields, .detail-fields-grid { grid-template-columns: 1fr; }
+    .venue-primary-fields, .detail-fields-grid, .pricing-options, .financial-fields-grid { grid-template-columns: 1fr; }
     .venue-edit-notice { align-items: flex-start; flex-direction: column; gap: 7px; }
+    .venue-toolbar-actions { align-items: stretch; width: 100%; }
+    .venue-search, .venue-toolbar-actions .button { width: 100%; }
     .venue-address-field, .detail-field-full { grid-column: auto; }
     .detail-section { padding: 16px 13px; }
+    .venue-financial-section { padding: 17px 13px; }
+    .financial-field-full { grid-column: auto; }
     .pros-cons-editors, .venue-pros-cons { grid-template-columns: 1fr; }
     .venue-form-actions { flex-direction: column-reverse; }
     .venue-form-actions .button { width: 100%; }

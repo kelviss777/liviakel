@@ -342,10 +342,10 @@ async function updateCurrentWedding({ partnerOne, partnerTwo, weddingDate }) {
     return mapWeddingRecord(data);
 }
 
-function normalizeVenueDatabaseNumber(value, { integer = false } = {}) {
+function normalizeVenueDatabaseNumber(value, { integer = false, maximum = Infinity } = {}) {
     if (value === null || value === undefined || value === "") return null;
     const number = Number(value);
-    if (!Number.isFinite(number) || (integer && !Number.isInteger(number))) return null;
+    if (!Number.isFinite(number) || number < 0 || number > maximum || (integer && !Number.isInteger(number))) return null;
     return number;
 }
 
@@ -368,17 +368,57 @@ function normalizeVenueJsonList(value) {
     }).filter(Boolean);
 }
 
+const VENUE_PRICING_TYPES = new Set(["fixed", "per_person", "fixed_plus_per_person", "unknown"]);
+const VENUE_CHILD_PRICING_TYPES = new Set(["free", "same_as_adult", "custom", "unknown"]);
+
+function normalizeVenuePricingType(value, budgetValue, { inferLegacy = false } = {}) {
+    const pricingType = String(value ?? "").trim();
+    if (VENUE_PRICING_TYPES.has(pricingType)) return pricingType;
+    return inferLegacy && budgetValue !== null ? "fixed" : "unknown";
+}
+
+function normalizeVenueChildPricingType(value) {
+    const childPricingType = String(value ?? "").trim();
+    return VENUE_CHILD_PRICING_TYPES.has(childPricingType) ? childPricingType : "unknown";
+}
+
 function mapVenueDatabaseRecord(record = {}) {
+    const type = String(record.type ?? "").trim();
+    const budgetValue = normalizeVenueDatabaseNumber(record.budget_value);
+    const pricingType = normalizeVenuePricingType(record.pricing_type, budgetValue, {
+        inferLegacy: !Object.hasOwn(record, "pricing_type") || record.pricing_type === null
+    });
+    const childPricingType = normalizeVenueChildPricingType(record.child_pricing_type);
+    const includedGuests = normalizeVenueDatabaseNumber(record.included_guests, { integer: true });
+    let pricePerChild = normalizeVenueDatabaseNumber(record.price_per_child);
+    let childAgeLimit = normalizeVenueDatabaseNumber(record.child_age_limit, { integer: true, maximum: 17 });
+    let extraGuestPrice = normalizeVenueDatabaseNumber(record.extra_guest_price);
+    if (childPricingType === "same_as_adult" || childPricingType === "unknown") {
+        pricePerChild = null;
+        childAgeLimit = null;
+    } else if (childPricingType === "free") {
+        pricePerChild = null;
+    }
+    if (includedGuests === null) extraGuestPrice = null;
+
     const venue = {
         id: String(record.id ?? ""),
         name: String(record.name ?? ""),
-        type: String(record.type ?? ""),
+        type,
+        customType: type === "Outro" ? String(record.custom_type ?? "").trim() || null : null,
         address: String(record.address ?? ""),
         favorite: record.favorite === true,
         description: String(record.description ?? ""),
         rating: normalizeVenueDatabaseNumber(record.rating, { integer: true }),
-        budgetValue: normalizeVenueDatabaseNumber(record.budget_value),
+        pricingType,
+        budgetValue,
         depositValue: normalizeVenueDatabaseNumber(record.deposit_value),
+        pricePerAdult: normalizeVenueDatabaseNumber(record.price_per_adult),
+        childPricingType,
+        pricePerChild,
+        childAgeLimit,
+        includedGuests,
+        extraGuestPrice,
         decorationOption: String(record.decoration_option ?? "unknown"),
         hasBridalRoom: record.has_bridal_room === true,
         capacity: normalizeVenueDatabaseNumber(record.capacity, { integer: true }),
@@ -396,23 +436,55 @@ function mapVenueDatabaseRecord(record = {}) {
     return venue;
 }
 
-function venueNumberForDatabase(value, { integer = false } = {}) {
+function venueNumberForDatabase(value, { integer = false, maximum = Infinity } = {}) {
     if (value === null || value === undefined || value === "") return null;
     const number = Number(value);
-    if (!Number.isFinite(number) || (integer && !Number.isInteger(number))) return null;
+    if (!Number.isFinite(number) || number < 0 || number > maximum || (integer && !Number.isInteger(number))) return null;
     return number;
 }
 
+function venueMoneyForDatabase(value) {
+    const number = venueNumberForDatabase(value);
+    if (number === null) return null;
+    return Math.abs(Math.round(number * 100) - (number * 100)) < 1e-8 ? number : null;
+}
+
 function mapVenueToDatabasePayload(venue = {}) {
+    const type = String(venue.type ?? "").trim();
+    const budgetValue = venueMoneyForDatabase(venue.budgetValue);
+    const pricingType = normalizeVenuePricingType(venue.pricingType, budgetValue, {
+        inferLegacy: !Object.hasOwn(venue, "pricingType")
+    });
+    const childPricingType = normalizeVenueChildPricingType(venue.childPricingType);
+    const includedGuests = venueNumberForDatabase(venue.includedGuests, { integer: true });
+    let pricePerChild = venueMoneyForDatabase(venue.pricePerChild);
+    let childAgeLimit = venueNumberForDatabase(venue.childAgeLimit, { integer: true, maximum: 17 });
+    let extraGuestPrice = venueMoneyForDatabase(venue.extraGuestPrice);
+    if (childPricingType === "same_as_adult" || childPricingType === "unknown") {
+        pricePerChild = null;
+        childAgeLimit = null;
+    } else if (childPricingType === "free") {
+        pricePerChild = null;
+    }
+    if (includedGuests === null) extraGuestPrice = null;
+
     return {
         name: String(venue.name ?? "").trim(),
-        type: String(venue.type ?? "").trim(),
+        type,
+        custom_type: type === "Outro" ? String(venue.customType ?? "").trim() || null : null,
         address: String(venue.address ?? "").trim(),
         favorite: venue.favorite === true,
         description: String(venue.description ?? "").trim(),
         rating: venueNumberForDatabase(venue.rating, { integer: true }),
-        budget_value: venueNumberForDatabase(venue.budgetValue),
-        deposit_value: venueNumberForDatabase(venue.depositValue),
+        pricing_type: pricingType,
+        budget_value: budgetValue,
+        deposit_value: venueMoneyForDatabase(venue.depositValue),
+        price_per_adult: venueMoneyForDatabase(venue.pricePerAdult),
+        child_pricing_type: childPricingType,
+        price_per_child: pricePerChild,
+        child_age_limit: childAgeLimit,
+        included_guests: includedGuests,
+        extra_guest_price: extraGuestPrice,
         decoration_option: String(venue.decorationOption ?? "unknown"),
         has_bridal_room: venue.hasBridalRoom === true,
         capacity: venueNumberForDatabase(venue.capacity, { integer: true }),
